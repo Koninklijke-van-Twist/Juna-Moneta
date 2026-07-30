@@ -290,6 +290,11 @@ function moneta_store_bank_snapshot(string $company, string $snapshotDate, array
     }
 
     $pdo = moneta_pdo();
+    $previousByAccount = [];
+    foreach (moneta_bank_balances_as_of($company, $snapshotDate, true) as $previous) {
+        $previousByAccount[(string) $previous['account_no']] = $previous;
+    }
+
     $createdAt = gmdate('c');
     $statement = $pdo->prepare(
         'INSERT INTO bank_balance_snapshots
@@ -301,6 +306,12 @@ function moneta_store_bank_snapshot(string $company, string $snapshotDate, array
             balance_lcy = excluded.balance_lcy,
             currency_code = excluded.currency_code,
             created_at = excluded.created_at'
+    );
+    $deleteUnchanged = $pdo->prepare(
+        'DELETE FROM bank_balance_snapshots
+         WHERE company = :company
+           AND account_no = :account_no
+           AND snapshot_date = :snapshot_date'
     );
 
     $stored = 0;
@@ -319,12 +330,30 @@ function moneta_store_bank_snapshot(string $company, string $snapshotDate, array
             $accountName = $accountNo;
         }
 
+        $balance = (float) ($account['balance_lcy'] ?? 0);
+        $currency = moneta_normalize_currency_code((string) ($account['currency_code'] ?? ''));
+        $previous = $previousByAccount[$accountNo] ?? null;
+        $unchanged = is_array($previous)
+            && abs((float) ($previous['balance_lcy'] ?? 0) - $balance) < 0.00001
+            && trim((string) ($previous['account_name'] ?? '')) === $accountName
+            && moneta_normalize_currency_code((string) ($previous['currency_code'] ?? '')) === $currency;
+
+        if ($unchanged) {
+            // Geen nieuw datapunt; ruim eventuele eerdere same-day row op.
+            $deleteUnchanged->execute([
+                ':company' => $company,
+                ':account_no' => $accountNo,
+                ':snapshot_date' => $snapshotDate,
+            ]);
+            continue;
+        }
+
         $statement->execute([
             ':company' => $company,
             ':account_no' => $accountNo,
             ':account_name' => $accountName,
-            ':balance_lcy' => (float) ($account['balance_lcy'] ?? 0),
-            ':currency_code' => moneta_normalize_currency_code((string) ($account['currency_code'] ?? '')),
+            ':balance_lcy' => $balance,
+            ':currency_code' => $currency,
             ':snapshot_date' => $snapshotDate,
             ':created_at' => $createdAt,
         ]);
@@ -1014,6 +1043,7 @@ function moneta_run_nightly_bank_snapshots(string $snapshotDate = '', int $ttl =
 
 /**
  * Bouwt chart-klare series uit SQLite (geen live BC-calls).
+ * Ontbrekende dagen krijgen de laatst bekende eerdere saldo-waarde (carry-forward).
  *
  * @return array{labels: string[], series: list<array{account_no: string, name: string, data: list<float|null>}>}
  */
@@ -1031,17 +1061,16 @@ function moneta_bank_chart_data(string $company, string $dateFrom, string $dateT
     }
 
     $pdo = moneta_pdo();
+    // Inclusief eerdere snapshots vóór dateFrom, zodat gaps vanaf de startdatum gevuld kunnen worden.
     $statement = $pdo->prepare(
         'SELECT account_no, account_name, balance_lcy, snapshot_date
          FROM bank_balance_snapshots
          WHERE company = :company
-           AND snapshot_date >= :date_from
            AND snapshot_date <= :date_to
          ORDER BY snapshot_date ASC, account_name COLLATE NOCASE ASC'
     );
     $statement->execute([
         ':company' => $company,
-        ':date_from' => $dateFrom,
         ':date_to' => $dateTo,
     ]);
     $rows = $statement->fetchAll();
@@ -1050,16 +1079,14 @@ function moneta_bank_chart_data(string $company, string $dateFrom, string $dateT
         return ['labels' => [], 'series' => []];
     }
 
-    $labelsMap = [];
     $accounts = [];
     foreach ($rows as $row) {
-        $date = (string) ($row['snapshot_date'] ?? '');
-        $accountNo = (string) ($row['account_no'] ?? '');
+        $date = moneta_parse_date((string) ($row['snapshot_date'] ?? ''));
+        $accountNo = trim((string) ($row['account_no'] ?? ''));
         if ($date === '' || $accountNo === '') {
             continue;
         }
 
-        $labelsMap[$date] = true;
         if (!isset($accounts[$accountNo])) {
             $accounts[$accountNo] = [
                 'account_no' => $accountNo,
@@ -1075,8 +1102,17 @@ function moneta_bank_chart_data(string $company, string $dateFrom, string $dateT
         $accounts[$accountNo]['points'][$date] = (float) ($row['balance_lcy'] ?? 0);
     }
 
-    $labels = array_keys($labelsMap);
-    sort($labels);
+    if ($accounts === []) {
+        return ['labels' => [], 'series' => []];
+    }
+
+    $labels = [];
+    $cursor = new DateTimeImmutable($dateFrom);
+    $end = new DateTimeImmutable($dateTo);
+    while ($cursor <= $end) {
+        $labels[] = $cursor->format('Y-m-d');
+        $cursor = $cursor->modify('+1 day');
+    }
 
     uasort($accounts, static function (array $a, array $b): int {
         return strcasecmp((string) $a['name'], (string) $b['name']);
@@ -1084,12 +1120,31 @@ function moneta_bank_chart_data(string $company, string $dateFrom, string $dateT
 
     $series = [];
     foreach ($accounts as $account) {
+        $pointDates = array_keys($account['points']);
+        sort($pointDates);
+        $pointIndex = 0;
+        $pointCount = count($pointDates);
+        $lastKnown = null;
         $data = [];
+        $hasValueInRange = false;
+
         foreach ($labels as $label) {
-            $data[] = array_key_exists($label, $account['points'])
-                ? (float) $account['points'][$label]
-                : null;
+            while ($pointIndex < $pointCount && $pointDates[$pointIndex] <= $label) {
+                $lastKnown = (float) $account['points'][$pointDates[$pointIndex]];
+                $pointIndex++;
+            }
+            if ($lastKnown === null) {
+                $data[] = null;
+            } else {
+                $data[] = $lastKnown;
+                $hasValueInRange = true;
+            }
         }
+
+        if (!$hasValueInRange) {
+            continue;
+        }
+
         $series[] = [
             'account_no' => (string) $account['account_no'],
             'name' => (string) $account['name'],
@@ -1104,9 +1159,11 @@ function moneta_bank_chart_data(string $company, string $dateFrom, string $dateT
 }
 
 /**
- * @return list<array{account_no: string, account_name: string, balance_lcy: float, currency_code: string}>
+ * Laatste bekende saldo per rekening op/vóór $asOfDate (sparse snapshots).
+ *
+ * @return list<array{account_no: string, account_name: string, balance_lcy: float, currency_code: string, snapshot_date?: string}>
  */
-function moneta_latest_bank_balances(string $company, string $asOfDate = ''): array
+function moneta_bank_balances_as_of(string $company, string $asOfDate = '', bool $strictBefore = false): array
 {
     $asOfDate = moneta_parse_date($asOfDate);
     if ($asOfDate === '') {
@@ -1114,31 +1171,26 @@ function moneta_latest_bank_balances(string $company, string $asOfDate = ''): ar
     }
 
     $pdo = moneta_pdo();
-    $dateStatement = $pdo->prepare(
-        'SELECT MAX(snapshot_date) AS snapshot_date
-         FROM bank_balance_snapshots
-         WHERE company = :company
-           AND snapshot_date <= :as_of'
-    );
-    $dateStatement->execute([
-        ':company' => $company,
-        ':as_of' => $asOfDate,
-    ]);
-    $snapshotDate = moneta_parse_date((string) ($dateStatement->fetch()['snapshot_date'] ?? ''));
-    if ($snapshotDate === '') {
-        return [];
-    }
-
+    $operator = $strictBefore ? '<' : '<=';
     $statement = $pdo->prepare(
-        'SELECT account_no, account_name, balance_lcy, currency_code
-         FROM bank_balance_snapshots
-         WHERE company = :company
-           AND snapshot_date = :snapshot_date
-         ORDER BY account_name COLLATE NOCASE ASC'
+        'SELECT b.account_no, b.account_name, b.balance_lcy, b.currency_code, b.snapshot_date
+         FROM bank_balance_snapshots b
+         INNER JOIN (
+            SELECT account_no, MAX(snapshot_date) AS snapshot_date
+            FROM bank_balance_snapshots
+            WHERE company = :company
+              AND snapshot_date ' . $operator . ' :as_of
+            GROUP BY account_no
+         ) latest
+           ON latest.account_no = b.account_no
+          AND latest.snapshot_date = b.snapshot_date
+         WHERE b.company = :company2
+         ORDER BY b.account_name COLLATE NOCASE ASC'
     );
     $statement->execute([
         ':company' => $company,
-        ':snapshot_date' => $snapshotDate,
+        ':as_of' => $asOfDate,
+        ':company2' => $company,
     ]);
 
     $accounts = [];
@@ -1152,10 +1204,19 @@ function moneta_latest_bank_balances(string $company, string $asOfDate = ''): ar
             'account_name' => trim((string) ($row['account_name'] ?? $accountNo)),
             'balance_lcy' => (float) ($row['balance_lcy'] ?? 0),
             'currency_code' => moneta_normalize_currency_code((string) ($row['currency_code'] ?? '')),
+            'snapshot_date' => moneta_parse_date((string) ($row['snapshot_date'] ?? '')),
         ];
     }
 
     return $accounts;
+}
+
+/**
+ * @return list<array{account_no: string, account_name: string, balance_lcy: float, currency_code: string}>
+ */
+function moneta_latest_bank_balances(string $company, string $asOfDate = ''): array
+{
+    return moneta_bank_balances_as_of($company, $asOfDate, false);
 }
 
 /**
