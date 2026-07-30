@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Nightly job: haalt Bankrekeningen-saldi op en schrijft dagelijkse SQLite-snapshots.
+ * Nightly job: banksaldi + geplande termijnfacturen van open projecten → SQLite.
  * Wordt via GET/CLI aangeroepen door het bestaande nightly-script (geen UI).
  *
  * Voorbeeld: GET /Moneta/web/nightly.php
@@ -27,20 +27,22 @@ if ($snapshotDate === '' && PHP_SAPI === 'cli') {
 }
 
 try {
-    $run = moneta_run_nightly_bank_snapshots($snapshotDate);
-    $hasResults = ($run['results'] ?? []) !== [];
+    $run = moneta_run_nightly_jobs($snapshotDate);
+    $hasResults = ($run['bank'] ?? []) !== [] || ($run['installments'] ?? []) !== [];
     $payload = [
         'ok' => $hasResults || ($run['errors'] ?? []) === [],
         'generated_at' => gmdate('c'),
         'snapshot_date' => (string) ($run['snapshot_date'] ?? ''),
         'total_duration_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
-        'companies' => $run['results'] ?? [],
+        'bank' => $run['bank'] ?? [],
+        'installments' => $run['installments'] ?? [],
         'errors' => $run['errors'] ?? [],
     ];
 
     if (PHP_SAPI === 'cli') {
         echo 'OK snapshot_date=' . $payload['snapshot_date'] . "\n";
-        foreach ($payload['companies'] as $row) {
+        echo "Bank:\n";
+        foreach ($payload['bank'] as $row) {
             echo sprintf(
                 "  %s: accounts=%d stored=%d\n",
                 (string) ($row['company'] ?? ''),
@@ -48,9 +50,20 @@ try {
                 (int) ($row['stored'] ?? 0)
             );
         }
+        echo "Installments:\n";
+        foreach ($payload['installments'] as $row) {
+            echo sprintf(
+                "  %s: open_projects=%d installments=%d stored=%d\n",
+                (string) ($row['company'] ?? ''),
+                (int) ($row['open_projects'] ?? 0),
+                (int) ($row['installments'] ?? 0),
+                (int) ($row['stored'] ?? 0)
+            );
+        }
         foreach ($payload['errors'] as $error) {
             echo sprintf(
-                "  ERROR %s: %s\n",
+                "  ERROR [%s] %s: %s\n",
+                (string) ($error['step'] ?? ''),
                 (string) ($error['company'] ?? ''),
                 (string) ($error['error'] ?? '')
             );

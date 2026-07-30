@@ -22,25 +22,6 @@ function moneta_h(?string $value): string
     return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
-function moneta_url(array $params = []): string
-{
-    $query = $_GET;
-    foreach ($params as $key => $value) {
-        if ($value === null || $value === '') {
-            unset($query[$key]);
-            continue;
-        }
-        $query[$key] = $value;
-    }
-    unset($query['lang'], $query['_loaded']);
-
-    $path = strtok((string) ($_SERVER['REQUEST_URI'] ?? 'index.php'), '?') ?: 'index.php';
-    $lang = getCurrentLanguage();
-    $query['lang'] = $lang;
-
-    return $path . '?' . http_build_query($query);
-}
-
 /**
  * Page load
  */
@@ -78,22 +59,42 @@ if ($dateFrom > $dateTo) {
     $dateTo = $tmp;
 }
 
+$forecastFrom = moneta_clamp_forecast_from((string) ($_GET['forecast_from'] ?? ''));
+$forecastTo = moneta_parse_date((string) ($_GET['forecast_to'] ?? ''));
+if ($forecastTo === '') {
+    $forecastTo = moneta_default_forecast_to();
+}
+if ($forecastFrom > $forecastTo) {
+    $forecastTo = $forecastFrom;
+}
+
 auth_set_current_company_context($company);
 
 $errorKey = '';
 $chartData = ['labels' => [], 'series' => []];
+$forecastData = ['labels' => [], 'series' => [], 'meta' => []];
 
 try {
     $chartData = moneta_bank_chart_data($company, $dateFrom, $dateTo);
+    $forecastData = moneta_forecast_chart_data($company, $forecastFrom, $forecastTo);
 } catch (Throwable $loadError) {
     $errorKey = 'moneta.error.load_failed';
 }
 
 $hasChartData = ($chartData['labels'] ?? []) !== [] && ($chartData['series'] ?? []) !== [];
+$hasForecastData = ($forecastData['labels'] ?? []) !== [] && ($forecastData['series'] ?? []) !== [];
 $chartJson = json_encode($chartData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+$forecastJson = json_encode($forecastData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 if (!is_string($chartJson)) {
     $chartJson = '{"labels":[],"series":[]}';
 }
+if (!is_string($forecastJson)) {
+    $forecastJson = '{"labels":[],"series":[],"meta":{}}';
+}
+
+$forecastMeta = is_array($forecastData['meta'] ?? null) ? $forecastData['meta'] : [];
+$installmentCount = (int) ($forecastMeta['installment_count'] ?? 0);
+$unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
 
 ?><!DOCTYPE html>
 <html lang="<?= moneta_h(getHtmlLang()) ?>">
@@ -115,7 +116,8 @@ if (!is_string($chartJson)) {
         .moneta-card h1, .moneta-card h2 { margin: 0 0 8px; color: var(--kvt-text); }
         .moneta-subtitle { color: var(--kvt-muted); margin: 0 0 16px; }
         .moneta-form { display: grid; gap: 12px; }
-        .moneta-form-grid { display: grid; gap: 12px; }
+        .moneta-form-grid,
+        .moneta-form-forecast { display: grid; gap: 12px; }
         .moneta-form label { display: grid; gap: 6px; font-weight: 700; color: var(--kvt-muted); }
         .moneta-form input, .moneta-form select, .moneta-btn {
             font: inherit; border-radius: 10px; border: 1px solid var(--kvt-line); padding: 12px 14px;
@@ -129,14 +131,20 @@ if (!is_string($chartJson)) {
             border: 1px solid #fecaca; background: #fef2f2; color: var(--kvt-danger);
             border-radius: 10px; padding: 12px 14px; margin-bottom: 16px;
         }
+        .moneta-note {
+            border: 1px solid #dbeafe; background: #f8fbff; color: var(--kvt-muted);
+            border-radius: 10px; padding: 10px 12px; margin: 0 0 14px; font-size: 0.92rem;
+        }
         .moneta-empty {
             border: 1px dashed var(--kvt-line); border-radius: 10px; padding: 24px 16px;
             color: var(--kvt-muted); text-align: center;
         }
         .moneta-chart-wrap { position: relative; height: 320px; width: 100%; }
+        .moneta-section-title { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--kvt-muted); margin: 4px 0 0; }
         @media (min-width: 640px) {
-            .moneta-form-grid { grid-template-columns: 1.2fr 1fr 1fr auto; align-items: end; }
-            .moneta-form-grid .moneta-btn { width: auto; min-width: 120px; }
+            .moneta-form-grid { grid-template-columns: 1.4fr 1fr 1fr; align-items: end; }
+            .moneta-form-forecast { grid-template-columns: 1fr 1fr auto; align-items: end; }
+            .moneta-form-forecast .moneta-btn { width: auto; min-width: 120px; }
             .moneta-chart-wrap { height: 400px; }
         }
         .moneta-loader {
@@ -171,6 +179,7 @@ if (!is_string($chartJson)) {
         <p class="moneta-subtitle"><?= moneta_h(LOC('moneta.hero.subtitle')) ?></p>
 
         <form class="moneta-form" method="get" action="index.php">
+            <p class="moneta-section-title"><?= moneta_h(LOC('moneta.section.history')) ?></p>
             <div class="moneta-form-grid">
                 <label>
                     <?= moneta_h(LOC('moneta.label.company')) ?>
@@ -189,6 +198,18 @@ if (!is_string($chartJson)) {
                 <label>
                     <?= moneta_h(LOC('moneta.label.date_to')) ?>
                     <input type="date" name="date_to" value="<?= moneta_h($dateTo) ?>" required>
+                </label>
+            </div>
+
+            <p class="moneta-section-title"><?= moneta_h(LOC('moneta.section.forecast')) ?></p>
+            <div class="moneta-form-forecast">
+                <label>
+                    <?= moneta_h(LOC('moneta.label.forecast_from')) ?>
+                    <input type="date" name="forecast_from" value="<?= moneta_h($forecastFrom) ?>" min="<?= moneta_h(date('Y-m-d')) ?>" required>
+                </label>
+                <label>
+                    <?= moneta_h(LOC('moneta.label.forecast_to')) ?>
+                    <input type="date" name="forecast_to" value="<?= moneta_h($forecastTo) ?>" min="<?= moneta_h(date('Y-m-d')) ?>" required>
                 </label>
                 <button class="moneta-btn contract-nav" type="submit"><?= moneta_h(LOC('moneta.btn.apply')) ?></button>
             </div>
@@ -209,6 +230,25 @@ if (!is_string($chartJson)) {
             </div>
         <?php else: ?>
             <div class="moneta-empty"><?= moneta_h(LOC('moneta.empty.bank')) ?></div>
+        <?php endif; ?>
+    </section>
+
+    <section class="moneta-card">
+        <h2><?= moneta_h(LOC('moneta.chart.forecast_title')) ?></h2>
+        <p class="moneta-subtitle"><?= moneta_h(LOC('moneta.chart.forecast_subtitle')) ?></p>
+        <p class="moneta-note"><?= moneta_h(LOC('moneta.chart.forecast_link_note')) ?></p>
+        <?php if ($hasForecastData && $installmentCount > 0): ?>
+            <p class="moneta-subtitle">
+                <?= moneta_h(sprintf(LOC('moneta.chart.forecast_meta'), $installmentCount, $unassignedCount)) ?>
+            </p>
+        <?php endif; ?>
+
+        <?php if ($hasForecastData): ?>
+            <div class="moneta-chart-wrap">
+                <canvas id="moneta-forecast-chart" aria-label="<?= moneta_h(LOC('moneta.chart.forecast_title')) ?>"></canvas>
+            </div>
+        <?php else: ?>
+            <div class="moneta-empty"><?= moneta_h(LOC('moneta.empty.forecast')) ?></div>
         <?php endif; ?>
     </section>
 </div>
@@ -250,12 +290,6 @@ if (!is_string($chartJson)) {
         }
     });
 
-    const chartPayload = <?= $chartJson ?>;
-    const canvas = document.getElementById('moneta-bank-chart');
-    if (!canvas || typeof Chart === 'undefined' || !chartPayload || !Array.isArray(chartPayload.labels)) {
-        return;
-    }
-
     const palette = [
         '#00529B', '#0099cc', '#15803d', '#b45309', '#be123c',
         '#0f766e', '#7c3aed', '#0369a1', '#4d7c0f', '#c2410c'
@@ -281,72 +315,84 @@ if (!is_string($chartJson)) {
         }).format(number);
     }
 
-    const datasets = (chartPayload.series || []).map(function (serie, index) {
-        const color = palette[index % palette.length];
-        return {
-            label: serie.name || serie.account_no || ('Rekening ' + (index + 1)),
-            data: serie.data || [],
-            borderColor: color,
-            backgroundColor: color,
-            tension: 0.25,
-            pointRadius: 2,
-            pointHoverRadius: 4,
-            borderWidth: 2,
-            spanGaps: true
-        };
-    });
+    function renderLineChart(canvasId, chartPayload, dashedTotal) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas || typeof Chart === 'undefined' || !chartPayload || !Array.isArray(chartPayload.labels) || chartPayload.labels.length === 0) {
+            return;
+        }
 
-    new Chart(canvas, {
-        type: 'line',
-        data: {
-            labels: chartPayload.labels.map(formatDateLabel),
-            datasets: datasets
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: {
-                mode: 'nearest',
-                intersect: false
+        const datasets = (chartPayload.series || []).map(function (serie, index) {
+            const color = palette[index % palette.length];
+            const isTotal = dashedTotal && (serie.account_no === '__total__' || index === 0 && serie.name === 'Totaal');
+            return {
+                label: serie.name || serie.account_no || ('Serie ' + (index + 1)),
+                data: serie.data || [],
+                borderColor: isTotal ? '#111827' : color,
+                backgroundColor: isTotal ? '#111827' : color,
+                borderDash: isTotal ? [6, 4] : [],
+                tension: 0.25,
+                pointRadius: 2,
+                pointHoverRadius: 4,
+                borderWidth: isTotal ? 2.5 : 2,
+                spanGaps: true
+            };
+        });
+
+        new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels: chartPayload.labels.map(formatDateLabel),
+                datasets: datasets
             },
-            plugins: {
-                legend: {
-                    position: 'bottom',
-                    labels: {
-                        boxWidth: 12,
-                        usePointStyle: true
-                    }
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'nearest',
+                    intersect: false
                 },
-                tooltip: {
-                    callbacks: {
-                        label: function (context) {
-                            const label = context.dataset.label || '';
-                            return label + ': ' + formatEuro(context.parsed.y);
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            boxWidth: 12,
+                            usePointStyle: true
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function (context) {
+                                const label = context.dataset.label || '';
+                                return label + ': ' + formatEuro(context.parsed.y);
+                            }
                         }
                     }
-                }
-            },
-            scales: {
-                x: {
-                    ticks: {
-                        maxRotation: 0,
-                        autoSkip: true,
-                        maxTicksLimit: 8
-                    },
-                    grid: {
-                        display: false
-                    }
                 },
-                y: {
-                    ticks: {
-                        callback: function (value) {
-                            return formatEuro(value);
+                scales: {
+                    x: {
+                        ticks: {
+                            maxRotation: 0,
+                            autoSkip: true,
+                            maxTicksLimit: 8
+                        },
+                        grid: {
+                            display: false
+                        }
+                    },
+                    y: {
+                        ticks: {
+                            callback: function (value) {
+                                return formatEuro(value);
+                            }
                         }
                     }
                 }
             }
-        }
-    });
+        });
+    }
+
+    renderLineChart('moneta-bank-chart', <?= $chartJson ?>, false);
+    renderLineChart('moneta-forecast-chart', <?= $forecastJson ?>, true);
 })();
 </script>
 </body>
