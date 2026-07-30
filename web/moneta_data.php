@@ -9,9 +9,12 @@ require_once __DIR__ . '/project_data.php';
  * Constants
  */
 const MONETA_BANK_SELECT = 'No,Name,BalanceLCY,Currency_Code';
-const MONETA_OPEN_PROJECT_SELECT = 'No,Status,Ending_Date,Description';
+const MONETA_OPEN_PROJECT_SELECT = 'No,Status,Starting_Date,Ending_Date,Description';
 const MONETA_INSTALLMENT_SELECT = 'Job_No,Job_Task_No,Line_No,Line_Type,Description,Document_No,Line_Amount_LCY,Planning_Date,Invoiced_Amount_LCY,Qty_Invoiced,Quantity,LVS_Invoice_Currency_Code';
+const MONETA_BASELINE_COST_SELECT = 'Job_No,Job_Task_No,Line_No,Total_Cost_LCY,Remaining_Total_Cost_LCY,Currency_Code,Baseline_Version_in_Filter';
 const MONETA_UNASSIGNED_ACCOUNT_NO = '__unassigned__';
+/** OData-cache tijdens nightly: 5 uur, zodat hertesten snel via cache gaat. */
+const MONETA_NIGHTLY_ODATA_TTL = 18000;
 
 /**
  * Functies
@@ -118,6 +121,25 @@ function moneta_ensure_schema(PDO $pdo): void
         'CREATE INDEX IF NOT EXISTS idx_planned_installments_company_date
          ON planned_installments (company, planning_date)'
     );
+
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS planned_baseline_costs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT NOT NULL,
+            job_no TEXT NOT NULL,
+            currency_code TEXT NOT NULL DEFAULT \'\',
+            amount_lcy REAL NOT NULL,
+            period_start TEXT NOT NULL,
+            period_end TEXT NOT NULL,
+            bank_account_no TEXT NOT NULL DEFAULT \'\',
+            refreshed_at TEXT NOT NULL,
+            UNIQUE(company, job_no, currency_code)
+        )'
+    );
+    $pdo->exec(
+        'CREATE INDEX IF NOT EXISTS idx_planned_baseline_costs_company
+         ON planned_baseline_costs (company, period_start, period_end)'
+    );
 }
 
 function moneta_migrate_planned_installments_unique(PDO $pdo): void
@@ -223,7 +245,7 @@ function moneta_clamp_forecast_from(string $dateFrom): string
     return $dateFrom;
 }
 
-function moneta_fetch_bank_accounts(string $company, int $ttl = 60): array
+function moneta_fetch_bank_accounts(string $company, int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
 {
     $rows = project_fetch_rows($company, 'Bankrekeningen', [
         '$select' => MONETA_BANK_SELECT,
@@ -312,7 +334,7 @@ function moneta_store_bank_snapshot(string $company, string $snapshotDate, array
     return $stored;
 }
 
-function moneta_snapshot_bank_balances_for_company(string $company, string $snapshotDate = '', int $ttl = 60): array
+function moneta_snapshot_bank_balances_for_company(string $company, string $snapshotDate = '', int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
 {
     $snapshotDate = moneta_parse_date($snapshotDate);
     if ($snapshotDate === '') {
@@ -331,11 +353,11 @@ function moneta_snapshot_bank_balances_for_company(string $company, string $snap
 }
 
 /**
- * Lopende projecten: Status = Open, of Ending_Date leeg/in de toekomst (FinRap-achtig).
+ * Lopende projecten met start-/einddatum voor kostenperiode.
  *
- * @return list<string>
+ * @return list<array{job_no: string, starting_date: string, ending_date: string}>
  */
-function moneta_fetch_open_project_nos(string $company, int $ttl = 60): array
+function moneta_fetch_open_projects(string $company, int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
 {
     $rows = project_try_fetch_rows($company, 'Projecten', [
         '$select' => MONETA_OPEN_PROJECT_SELECT,
@@ -344,13 +366,13 @@ function moneta_fetch_open_project_nos(string $company, int $ttl = 60): array
 
     if ($rows === []) {
         $rows = project_try_fetch_rows($company, 'AppProjecten', [
-            '$select' => 'No,Status,LVS_Ending_Date,Description',
+            '$select' => 'No,Status,LVS_Starting_Date,LVS_Ending_Date,Description',
             '$filter' => "Status eq 'Open'",
         ], $ttl);
     }
 
     $today = date('Y-m-d');
-    $jobNos = [];
+    $projects = [];
     foreach ($rows as $row) {
         if (!is_array($row)) {
             continue;
@@ -361,21 +383,47 @@ function moneta_fetch_open_project_nos(string $company, int $ttl = 60): array
             continue;
         }
 
-        $endingDate = trim((string) ($row['Ending_Date'] ?? $row['LVS_Ending_Date'] ?? ''));
-        if (!moneta_is_bc_blank_date($endingDate)) {
-            $endingDay = substr($endingDate, 0, 10);
-            if (moneta_parse_date($endingDay) !== '' && $endingDay < $today) {
+        $endingRaw = trim((string) ($row['Ending_Date'] ?? $row['LVS_Ending_Date'] ?? ''));
+        $endingDate = '';
+        if (!moneta_is_bc_blank_date($endingRaw)) {
+            $endingDate = moneta_parse_date(substr($endingRaw, 0, 10));
+            if ($endingDate !== '' && $endingDate < $today) {
                 continue;
             }
         }
 
-        $jobNos[$jobNo] = true;
+        $startingRaw = trim((string) ($row['Starting_Date'] ?? $row['LVS_Starting_Date'] ?? ''));
+        $startingDate = '';
+        if (!moneta_is_bc_blank_date($startingRaw)) {
+            $startingDate = moneta_parse_date(substr($startingRaw, 0, 10));
+        }
+
+        $projects[$jobNo] = [
+            'job_no' => $jobNo,
+            'starting_date' => $startingDate,
+            'ending_date' => $endingDate,
+        ];
     }
 
-    $list = array_keys($jobNos);
-    natcasesort($list);
+    ksort($projects, SORT_NATURAL | SORT_FLAG_CASE);
 
-    return array_values($list);
+    return array_values($projects);
+}
+
+/**
+ * @return list<string>
+ */
+function moneta_fetch_open_project_nos(string $company, int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
+{
+    $jobNos = [];
+    foreach (moneta_fetch_open_projects($company, $ttl) as $project) {
+        $jobNo = trim((string) ($project['job_no'] ?? ''));
+        if ($jobNo !== '') {
+            $jobNos[] = $jobNo;
+        }
+    }
+
+    return $jobNos;
 }
 
 function moneta_is_factureerbare_line_type(string $lineType): bool
@@ -413,7 +461,7 @@ function moneta_installment_remaining_amount(array $row): float
  * @param list<string> $jobNos
  * @return list<array<string, mixed>>
  */
-function moneta_fetch_planned_installments_for_jobs(string $company, array $jobNos, string $dateFrom, int $ttl = 60): array
+function moneta_fetch_planned_installments_for_jobs(string $company, array $jobNos, string $dateFrom, int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
 {
     $dateFrom = moneta_parse_date($dateFrom);
     if ($dateFrom === '' || $jobNos === []) {
@@ -486,7 +534,7 @@ function moneta_fetch_planned_installments_for_jobs(string $company, array $jobN
  * @param list<array<string, mixed>> $installments
  * @return list<array<string, mixed>>
  */
-function moneta_resolve_installment_banks_from_documents(string $company, array $installments, int $ttl = 60): array
+function moneta_resolve_installment_banks_from_documents(string $company, array $installments, int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
 {
     $documentNos = [];
     foreach ($installments as $row) {
@@ -642,14 +690,22 @@ function moneta_store_planned_installments(string $company, array $installments)
     }
 }
 
-function moneta_snapshot_planned_installments_for_company(string $company, string $fromDate = '', int $ttl = 60): array
+function moneta_snapshot_planned_installments_for_company(string $company, string $fromDate = '', int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
 {
     $fromDate = moneta_parse_date($fromDate);
     if ($fromDate === '') {
         $fromDate = date('Y-m-d');
     }
 
-    $openJobs = moneta_fetch_open_project_nos($company, $ttl);
+    $openProjects = moneta_fetch_open_projects($company, $ttl);
+    $openJobs = [];
+    foreach ($openProjects as $project) {
+        $jobNo = trim((string) ($project['job_no'] ?? ''));
+        if ($jobNo !== '') {
+            $openJobs[] = $jobNo;
+        }
+    }
+
     $installments = moneta_fetch_planned_installments_for_jobs($company, $openJobs, $fromDate, $ttl);
     $accounts = moneta_fetch_bank_accounts($company, $ttl);
     $installments = moneta_resolve_installment_banks_from_documents($company, $installments, $ttl);
@@ -661,19 +717,213 @@ function moneta_snapshot_planned_installments_for_company(string $company, strin
         'open_projects' => count($openJobs),
         'installments' => count($installments),
         'stored' => $stored,
+        'projects' => $openProjects,
+        'accounts' => $accounts,
     ];
 }
 
-function moneta_run_nightly_jobs(string $snapshotDate = '', int $ttl = 60): array
+/**
+ * Kosten uit JobBaselineLines (beter dan ProjectPosten: Currency_Code + Remaining_Total_Cost_LCY).
+ * Datum: lineair van max(projectstart, vandaag) tot projecteinde.
+ *
+ * @param list<array{job_no: string, starting_date: string, ending_date: string}> $openProjects
+ * @param list<array<string, mixed>> $accounts
+ * @return list<array<string, mixed>>
+ */
+function moneta_fetch_baseline_costs_for_projects(
+    string $company,
+    array $openProjects,
+    string $asOfDate,
+    array $accounts,
+    int $ttl = MONETA_NIGHTLY_ODATA_TTL
+): array {
+    $asOfDate = moneta_parse_date($asOfDate);
+    if ($asOfDate === '') {
+        $asOfDate = date('Y-m-d');
+    }
+    if ($openProjects === []) {
+        return [];
+    }
+
+    $projectMap = [];
+    foreach ($openProjects as $project) {
+        $jobNo = trim((string) ($project['job_no'] ?? ''));
+        if ($jobNo === '') {
+            continue;
+        }
+        $projectMap[$jobNo] = $project;
+    }
+    if ($projectMap === []) {
+        return [];
+    }
+
+    // Schedule_Line-filter kan in BC paginatie laten crashen; FinRap gebruikt Baseline_Version_in_Filter.
+    $rows = project_try_fetch_rows($company, 'JobBaselineLines', [
+        '$select' => MONETA_BASELINE_COST_SELECT,
+        '$filter' => 'Baseline_Version_in_Filter eq true and Total_Cost_LCY ne 0',
+    ], $ttl);
+
+    $totals = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+
+        $jobNo = trim((string) ($row['Job_No'] ?? ''));
+        if ($jobNo === '' || !isset($projectMap[$jobNo])) {
+            continue;
+        }
+
+        $remaining = (float) ($row['Remaining_Total_Cost_LCY'] ?? 0);
+        $total = (float) ($row['Total_Cost_LCY'] ?? 0);
+        $amount = abs($remaining) >= 0.000001 ? $remaining : $total;
+        if (abs($amount) < 0.000001) {
+            continue;
+        }
+
+        $currency = moneta_normalize_currency_code((string) ($row['Currency_Code'] ?? ''));
+        $key = $jobNo . "\0" . $currency;
+        if (!isset($totals[$key])) {
+            $totals[$key] = [
+                'job_no' => $jobNo,
+                'currency_code' => $currency,
+                'amount_lcy' => 0.0,
+            ];
+        }
+        $totals[$key]['amount_lcy'] += $amount;
+    }
+
+    $costs = [];
+    foreach ($totals as $totalRow) {
+        $jobNo = (string) $totalRow['job_no'];
+        $project = $projectMap[$jobNo];
+        $startingDate = moneta_parse_date((string) ($project['starting_date'] ?? ''));
+        $endingDate = moneta_parse_date((string) ($project['ending_date'] ?? ''));
+
+        $periodStart = $startingDate !== '' && $startingDate > $asOfDate ? $startingDate : $asOfDate;
+        if ($endingDate !== '') {
+            $periodEnd = $endingDate;
+        } else {
+            // Geen einddatum: spreid over het komende jaar i.p.v. alles op één dag.
+            $periodEnd = date('Y-m-d', strtotime($periodStart . ' +1 year'));
+        }
+        if ($periodEnd < $periodStart) {
+            $periodEnd = $periodStart;
+        }
+
+        $costs[] = [
+            'job_no' => $jobNo,
+            'currency_code' => (string) $totalRow['currency_code'],
+            'amount_lcy' => (float) $totalRow['amount_lcy'],
+            'period_start' => $periodStart,
+            'period_end' => $periodEnd,
+            'bank_account_no' => '',
+        ];
+    }
+
+    return moneta_resolve_installment_banks_by_currency($costs, $accounts);
+}
+
+function moneta_store_baseline_costs(string $company, array $costs): int
+{
+    $pdo = moneta_pdo();
+    $pdo->beginTransaction();
+    try {
+        $delete = $pdo->prepare('DELETE FROM planned_baseline_costs WHERE company = :company');
+        $delete->execute([':company' => $company]);
+
+        $insert = $pdo->prepare(
+            'INSERT INTO planned_baseline_costs
+                (company, job_no, currency_code, amount_lcy, period_start, period_end, bank_account_no, refreshed_at)
+             VALUES
+                (:company, :job_no, :currency_code, :amount_lcy, :period_start, :period_end, :bank_account_no, :refreshed_at)
+             ON CONFLICT(company, job_no, currency_code) DO UPDATE SET
+                amount_lcy = excluded.amount_lcy,
+                period_start = excluded.period_start,
+                period_end = excluded.period_end,
+                bank_account_no = excluded.bank_account_no,
+                refreshed_at = excluded.refreshed_at'
+        );
+
+        $refreshedAt = gmdate('c');
+        $stored = 0;
+        foreach ($costs as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $jobNo = trim((string) ($row['job_no'] ?? ''));
+            $periodStart = moneta_parse_date((string) ($row['period_start'] ?? ''));
+            $periodEnd = moneta_parse_date((string) ($row['period_end'] ?? ''));
+            $amount = (float) ($row['amount_lcy'] ?? 0);
+            if ($jobNo === '' || $periodStart === '' || $periodEnd === '' || abs($amount) < 0.000001) {
+                continue;
+            }
+
+            $insert->execute([
+                ':company' => $company,
+                ':job_no' => $jobNo,
+                ':currency_code' => moneta_normalize_currency_code((string) ($row['currency_code'] ?? '')),
+                ':amount_lcy' => $amount,
+                ':period_start' => $periodStart,
+                ':period_end' => $periodEnd,
+                ':bank_account_no' => trim((string) ($row['bank_account_no'] ?? '')),
+                ':refreshed_at' => $refreshedAt,
+            ]);
+            $stored++;
+        }
+
+        $pdo->commit();
+
+        return $stored;
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+}
+
+function moneta_snapshot_baseline_costs_for_company(
+    string $company,
+    string $asOfDate = '',
+    int $ttl = MONETA_NIGHTLY_ODATA_TTL,
+    ?array $openProjects = null,
+    ?array $accounts = null
+): array {
+    $asOfDate = moneta_parse_date($asOfDate);
+    if ($asOfDate === '') {
+        $asOfDate = date('Y-m-d');
+    }
+
+    if ($openProjects === null) {
+        $openProjects = moneta_fetch_open_projects($company, $ttl);
+    }
+    if ($accounts === null) {
+        $accounts = moneta_fetch_bank_accounts($company, $ttl);
+    }
+
+    $costs = moneta_fetch_baseline_costs_for_projects($company, $openProjects, $asOfDate, $accounts, $ttl);
+    $stored = moneta_store_baseline_costs($company, $costs);
+
+    return [
+        'company' => $company,
+        'open_projects' => count($openProjects),
+        'cost_groups' => count($costs),
+        'stored' => $stored,
+    ];
+}
+
+function moneta_run_nightly_jobs(string $snapshotDate = '', int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
 {
     $snapshotDate = moneta_parse_date($snapshotDate);
     if ($snapshotDate === '') {
         $snapshotDate = date('Y-m-d');
     }
+    $ttl = max(MONETA_NIGHTLY_ODATA_TTL, (int) $ttl);
 
     $companies = project_companies_for_page($ttl);
     $bankResults = [];
     $installmentResults = [];
+    $costResults = [];
     $errors = [];
 
     foreach ($companies as $company) {
@@ -701,12 +951,39 @@ function moneta_run_nightly_jobs(string $snapshotDate = '', int $ttl = 60): arra
             echo '[' . date('H:i:s') . "] installments: {$company}\n";
         }
 
+        $installmentSnapshot = null;
         try {
-            $installmentResults[] = moneta_snapshot_planned_installments_for_company($company, $snapshotDate, $ttl);
+            $installmentSnapshot = moneta_snapshot_planned_installments_for_company($company, $snapshotDate, $ttl);
+            $installmentResults[] = [
+                'company' => $installmentSnapshot['company'],
+                'open_projects' => $installmentSnapshot['open_projects'],
+                'installments' => $installmentSnapshot['installments'],
+                'stored' => $installmentSnapshot['stored'],
+            ];
         } catch (Throwable $error) {
             $errors[] = [
                 'company' => $company,
                 'step' => 'installments',
+                'error' => $error->getMessage(),
+            ];
+        }
+
+        if (PHP_SAPI === 'cli') {
+            echo '[' . date('H:i:s') . "] baseline costs: {$company}\n";
+        }
+
+        try {
+            $costResults[] = moneta_snapshot_baseline_costs_for_company(
+                $company,
+                $snapshotDate,
+                $ttl,
+                is_array($installmentSnapshot['projects'] ?? null) ? $installmentSnapshot['projects'] : null,
+                is_array($installmentSnapshot['accounts'] ?? null) ? $installmentSnapshot['accounts'] : null
+            );
+        } catch (Throwable $error) {
+            $errors[] = [
+                'company' => $company,
+                'step' => 'baseline_costs',
                 'error' => $error->getMessage(),
             ];
         }
@@ -716,6 +993,7 @@ function moneta_run_nightly_jobs(string $snapshotDate = '', int $ttl = 60): arra
         'snapshot_date' => $snapshotDate,
         'bank' => $bankResults,
         'installments' => $installmentResults,
+        'baseline_costs' => $costResults,
         'errors' => $errors,
     ];
 }
@@ -723,7 +1001,7 @@ function moneta_run_nightly_jobs(string $snapshotDate = '', int $ttl = 60): arra
 /**
  * @deprecated Gebruik moneta_run_nightly_jobs
  */
-function moneta_run_nightly_bank_snapshots(string $snapshotDate = '', int $ttl = 60): array
+function moneta_run_nightly_bank_snapshots(string $snapshotDate = '', int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
 {
     $run = moneta_run_nightly_jobs($snapshotDate, $ttl);
 
@@ -915,12 +1193,102 @@ function moneta_load_planned_installments(string $company, string $dateFrom, str
 }
 
 /**
- * Prognose: startsaldi vandaag + cumulatieve geplande termijnfacturen per rekening.
+ * @return list<array<string, mixed>>
+ */
+function moneta_load_baseline_costs(string $company, string $dateFrom, string $dateTo): array
+{
+    $dateFrom = moneta_parse_date($dateFrom);
+    $dateTo = moneta_parse_date($dateTo);
+    if ($dateFrom === '' || $dateTo === '') {
+        return [];
+    }
+    if ($dateFrom > $dateTo) {
+        $tmp = $dateFrom;
+        $dateFrom = $dateTo;
+        $dateTo = $tmp;
+    }
+
+    $pdo = moneta_pdo();
+    $statement = $pdo->prepare(
+        'SELECT job_no, currency_code, amount_lcy, period_start, period_end, bank_account_no
+         FROM planned_baseline_costs
+         WHERE company = :company
+           AND period_start <= :date_to
+           AND period_end >= :date_from
+         ORDER BY period_start ASC, job_no ASC'
+    );
+    $statement->execute([
+        ':company' => $company,
+        ':date_from' => $dateFrom,
+        ':date_to' => $dateTo,
+    ]);
+
+    return $statement->fetchAll();
+}
+
+function moneta_inclusive_day_count(string $dateFrom, string $dateTo): int
+{
+    $dateFrom = moneta_parse_date($dateFrom);
+    $dateTo = moneta_parse_date($dateTo);
+    if ($dateFrom === '' || $dateTo === '' || $dateFrom > $dateTo) {
+        return 0;
+    }
+
+    $start = new DateTimeImmutable($dateFrom);
+    $end = new DateTimeImmutable($dateTo);
+
+    return ((int) $start->diff($end)->days) + 1;
+}
+
+/**
+ * Verdeel bedrag lineair over dagen in overlap van periode en forecast-range.
  *
- * Koppeling factuur→rekening (beste beschikbare signalen):
- * 1) SalesInvoice/SalesOrder.Company_Bank_Account_Code via Document_No
- * 2) Valuta-match LVS_Invoice_Currency_Code ↔ Bankrekeningen.Currency_Code
- * 3) Anders serie "Niet toegewezen"
+ * @return array<string, float> date => amount
+ */
+function moneta_linear_amount_by_date(
+    float $amount,
+    string $periodStart,
+    string $periodEnd,
+    string $rangeFrom,
+    string $rangeTo
+): array {
+    $periodStart = moneta_parse_date($periodStart);
+    $periodEnd = moneta_parse_date($periodEnd);
+    $rangeFrom = moneta_parse_date($rangeFrom);
+    $rangeTo = moneta_parse_date($rangeTo);
+    if ($periodStart === '' || $periodEnd === '' || $rangeFrom === '' || $rangeTo === '') {
+        return [];
+    }
+
+    $fullDays = moneta_inclusive_day_count($periodStart, $periodEnd);
+    if ($fullDays <= 0 || abs($amount) < 0.000001) {
+        return [];
+    }
+
+    $overlapStart = max($periodStart, $rangeFrom);
+    $overlapEnd = min($periodEnd, $rangeTo);
+    if ($overlapStart > $overlapEnd) {
+        return [];
+    }
+
+    $daily = $amount / $fullDays;
+    $out = [];
+    $cursor = new DateTimeImmutable($overlapStart);
+    $end = new DateTimeImmutable($overlapEnd);
+    while ($cursor <= $end) {
+        $key = $cursor->format('Y-m-d');
+        $out[$key] = $daily;
+        $cursor = $cursor->modify('+1 day');
+    }
+
+    return $out;
+}
+
+/**
+ * Prognose: startsaldi + termijnfacturen (in) − basislijnkosten (uit, lineair over projectperiode).
+ *
+ * Kostenbron: JobBaselineLines (Currency_Code; Remaining_Total_Cost_LCY / Total_Cost_LCY).
+ * Bankkoppeling kosten: valuta-match. Datums: max(projectstart, vandaag) → projecteinde.
  *
  * @return array{labels: string[], series: list<array{account_no: string, name: string, data: list<float|null>}>, meta: array}
  */
@@ -937,14 +1305,17 @@ function moneta_forecast_chart_data(string $company, string $dateFrom, string $d
 
     $accounts = moneta_latest_bank_balances($company, $dateFrom);
     $installments = moneta_load_planned_installments($company, $dateFrom, $dateTo);
+    $baselineCosts = moneta_load_baseline_costs($company, $dateFrom, $dateTo);
 
-    if ($accounts === [] && $installments === []) {
+    if ($accounts === [] && $installments === [] && $baselineCosts === []) {
         return [
             'labels' => [],
             'series' => [],
             'meta' => [
                 'installment_count' => 0,
                 'installment_total' => 0.0,
+                'cost_count' => 0,
+                'cost_total' => 0.0,
                 'unassigned_count' => 0,
             ],
         ];
@@ -956,13 +1327,33 @@ function moneta_forecast_chart_data(string $company, string $dateFrom, string $d
             'account_no' => $account['account_no'],
             'name' => $account['account_name'],
             'start' => (float) $account['balance_lcy'],
-            'inflows' => [],
+            'movements' => [],
         ];
     }
 
     $unassignedCount = 0;
     $installmentTotal = 0.0;
+    $costTotal = 0.0;
     $eventDates = [$dateFrom => true];
+
+    $ensureAccount = static function (string $bankAccountNo) use (&$accountMap, &$unassignedCount): string {
+        if ($bankAccountNo !== '' && isset($accountMap[$bankAccountNo])) {
+            return $bankAccountNo;
+        }
+
+        $bankAccountNo = MONETA_UNASSIGNED_ACCOUNT_NO;
+        if (!isset($accountMap[$bankAccountNo])) {
+            $accountMap[$bankAccountNo] = [
+                'account_no' => MONETA_UNASSIGNED_ACCOUNT_NO,
+                'name' => 'Niet toegewezen',
+                'start' => 0.0,
+                'movements' => [],
+            ];
+        }
+        $unassignedCount++;
+
+        return $bankAccountNo;
+    };
 
     foreach ($installments as $row) {
         $planningDate = moneta_parse_date((string) ($row['planning_date'] ?? ''));
@@ -971,30 +1362,72 @@ function moneta_forecast_chart_data(string $company, string $dateFrom, string $d
             continue;
         }
 
-        $bankAccountNo = trim((string) ($row['bank_account_no'] ?? ''));
-        if ($bankAccountNo === '' || !isset($accountMap[$bankAccountNo])) {
-            $bankAccountNo = MONETA_UNASSIGNED_ACCOUNT_NO;
-            if (!isset($accountMap[$bankAccountNo])) {
-                $accountMap[$bankAccountNo] = [
-                    'account_no' => MONETA_UNASSIGNED_ACCOUNT_NO,
-                    'name' => 'Niet toegewezen',
-                    'start' => 0.0,
-                    'inflows' => [],
-                ];
-            }
-            $unassignedCount++;
+        $bankAccountNo = $ensureAccount(trim((string) ($row['bank_account_no'] ?? '')));
+        if (!isset($accountMap[$bankAccountNo]['movements'][$planningDate])) {
+            $accountMap[$bankAccountNo]['movements'][$planningDate] = 0.0;
         }
-
-        if (!isset($accountMap[$bankAccountNo]['inflows'][$planningDate])) {
-            $accountMap[$bankAccountNo]['inflows'][$planningDate] = 0.0;
-        }
-        $accountMap[$bankAccountNo]['inflows'][$planningDate] += $amount;
+        $accountMap[$bankAccountNo]['movements'][$planningDate] += $amount;
         $installmentTotal += $amount;
         $eventDates[$planningDate] = true;
     }
 
+    foreach ($baselineCosts as $row) {
+        $amount = (float) ($row['amount_lcy'] ?? 0);
+        if (abs($amount) < 0.000001) {
+            continue;
+        }
+
+        $dailyAmounts = moneta_linear_amount_by_date(
+            $amount,
+            (string) ($row['period_start'] ?? ''),
+            (string) ($row['period_end'] ?? ''),
+            $dateFrom,
+            $dateTo
+        );
+        if ($dailyAmounts === []) {
+            continue;
+        }
+
+        $bankAccountNo = $ensureAccount(trim((string) ($row['bank_account_no'] ?? '')));
+        foreach ($dailyAmounts as $day => $dailyAmount) {
+            if (!isset($accountMap[$bankAccountNo]['movements'][$day])) {
+                $accountMap[$bankAccountNo]['movements'][$day] = 0.0;
+            }
+            // Kosten verlagen het banksaldo.
+            $accountMap[$bankAccountNo]['movements'][$day] -= $dailyAmount;
+            $eventDates[$day] = true;
+        }
+        $costTotal += $amount;
+    }
+
     $labels = array_keys($eventDates);
     sort($labels);
+
+    // Bij dichte lineaire kosten: houd labels werkbaar (start + mutaties + maandultimo's + eind).
+    if (count($labels) > 120) {
+        $keep = [$dateFrom => true, $dateTo => true];
+        foreach ($installments as $row) {
+            $planningDate = moneta_parse_date((string) ($row['planning_date'] ?? ''));
+            if ($planningDate !== '') {
+                $keep[$planningDate] = true;
+            }
+        }
+        foreach ($labels as $label) {
+            if (substr($label, -2) === '01' || $label === $dateFrom || $label === $dateTo) {
+                $keep[$label] = true;
+            }
+        }
+        // Neem ook elke ~7e dag mee voor vloeiende kostenlijn.
+        $index = 0;
+        foreach ($labels as $label) {
+            if ($index % 7 === 0) {
+                $keep[$label] = true;
+            }
+            $index++;
+        }
+        $labels = array_keys($keep);
+        sort($labels);
+    }
 
     uasort($accountMap, static function (array $a, array $b): int {
         if ($a['account_no'] === MONETA_UNASSIGNED_ACCOUNT_NO) {
@@ -1009,15 +1442,29 @@ function moneta_forecast_chart_data(string $company, string $dateFrom, string $d
 
     $series = [];
     foreach ($accountMap as $account) {
-        if (($account['inflows'] ?? []) === []) {
+        if (($account['movements'] ?? []) === []) {
             continue;
         }
 
         $running = (float) $account['start'];
+        $runningByDate = [];
+        $movementDates = array_keys($account['movements']);
+        sort($movementDates);
+        foreach ($movementDates as $day) {
+            $running += (float) ($account['movements'][$day] ?? 0);
+            $runningByDate[$day] = $running;
+        }
+
         $data = [];
+        $lastKnown = (float) $account['start'];
+        $moveIndex = 0;
+        $moveCount = count($movementDates);
         foreach ($labels as $label) {
-            $running += (float) ($account['inflows'][$label] ?? 0);
-            $data[] = $running;
+            while ($moveIndex < $moveCount && $movementDates[$moveIndex] <= $label) {
+                $lastKnown = $runningByDate[$movementDates[$moveIndex]];
+                $moveIndex++;
+            }
+            $data[] = $lastKnown;
         }
 
         $series[] = [
@@ -1034,6 +1481,8 @@ function moneta_forecast_chart_data(string $company, string $dateFrom, string $d
             'meta' => [
                 'installment_count' => count($installments),
                 'installment_total' => round($installmentTotal, 2),
+                'cost_count' => count($baselineCosts),
+                'cost_total' => round($costTotal, 2),
                 'unassigned_count' => $unassignedCount,
             ],
         ];
@@ -1045,6 +1494,8 @@ function moneta_forecast_chart_data(string $company, string $dateFrom, string $d
         'meta' => [
             'installment_count' => count($installments),
             'installment_total' => round($installmentTotal, 2),
+            'cost_count' => count($baselineCosts),
+            'cost_total' => round($costTotal, 2),
             'unassigned_count' => $unassignedCount,
         ],
     ];

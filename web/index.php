@@ -94,6 +94,7 @@ if (!is_string($forecastJson)) {
 
 $forecastMeta = is_array($forecastData['meta'] ?? null) ? $forecastData['meta'] : [];
 $installmentCount = (int) ($forecastMeta['installment_count'] ?? 0);
+$costCount = (int) ($forecastMeta['cost_count'] ?? 0);
 $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
 
 ?><!DOCTYPE html>
@@ -237,9 +238,9 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
         <h2><?= moneta_h(LOC('moneta.chart.forecast_title')) ?></h2>
         <p class="moneta-subtitle"><?= moneta_h(LOC('moneta.chart.forecast_subtitle')) ?></p>
         <p class="moneta-note"><?= moneta_h(LOC('moneta.chart.forecast_link_note')) ?></p>
-        <?php if ($hasForecastData && $installmentCount > 0): ?>
+        <?php if ($hasForecastData && ($installmentCount > 0 || $costCount > 0)): ?>
             <p class="moneta-subtitle">
-                <?= moneta_h(sprintf(LOC('moneta.chart.forecast_meta'), $installmentCount, $unassignedCount)) ?>
+                <?= moneta_h(sprintf(LOC('moneta.chart.forecast_meta'), $installmentCount, $costCount, $unassignedCount)) ?>
             </p>
         <?php endif; ?>
 
