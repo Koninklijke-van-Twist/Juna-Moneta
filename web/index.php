@@ -237,7 +237,6 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
     <section class="moneta-card">
         <h2><?= moneta_h(LOC('moneta.chart.forecast_title')) ?></h2>
         <p class="moneta-subtitle"><?= moneta_h(LOC('moneta.chart.forecast_subtitle')) ?></p>
-        <p class="moneta-note"><?= moneta_h(LOC('moneta.chart.forecast_link_note')) ?></p>
         <?php if ($hasForecastData && ($installmentCount > 0 || $costCount > 0)): ?>
             <p class="moneta-subtitle">
                 <?= moneta_h(sprintf(LOC('moneta.chart.forecast_meta'), $installmentCount, $costCount, $unassignedCount)) ?>
