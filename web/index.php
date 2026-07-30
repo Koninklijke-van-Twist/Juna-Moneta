@@ -315,7 +315,7 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
         }).format(number);
     }
 
-    function renderLineChart(canvasId, chartPayload, dashedTotal) {
+    function renderLineChart(canvasId, chartPayload) {
         const canvas = document.getElementById(canvasId);
         if (!canvas || typeof Chart === 'undefined' || !chartPayload || !Array.isArray(chartPayload.labels) || chartPayload.labels.length === 0) {
             return;
@@ -323,17 +323,15 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
 
         const datasets = (chartPayload.series || []).map(function (serie, index) {
             const color = palette[index % palette.length];
-            const isTotal = dashedTotal && (serie.account_no === '__total__' || index === 0 && serie.name === 'Totaal');
             return {
                 label: serie.name || serie.account_no || ('Serie ' + (index + 1)),
                 data: serie.data || [],
-                borderColor: isTotal ? '#111827' : color,
-                backgroundColor: isTotal ? '#111827' : color,
-                borderDash: isTotal ? [6, 4] : [],
+                borderColor: color,
+                backgroundColor: color,
                 tension: 0.25,
                 pointRadius: 2,
                 pointHoverRadius: 4,
-                borderWidth: isTotal ? 2.5 : 2,
+                borderWidth: 2,
                 spanGaps: true
             };
         });
@@ -391,8 +389,8 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
         });
     }
 
-    renderLineChart('moneta-bank-chart', <?= $chartJson ?>, false);
-    renderLineChart('moneta-forecast-chart', <?= $forecastJson ?>, true);
+    renderLineChart('moneta-bank-chart', <?= $chartJson ?>);
+    renderLineChart('moneta-forecast-chart', <?= $forecastJson ?>);
 })();
 </script>
 </body>

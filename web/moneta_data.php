@@ -1008,18 +1008,16 @@ function moneta_forecast_chart_data(string $company, string $dateFrom, string $d
     });
 
     $series = [];
-    $totalData = [];
-    foreach ($labels as $index => $label) {
-        $totalData[$index] = 0.0;
-    }
-
     foreach ($accountMap as $account) {
+        if (($account['inflows'] ?? []) === []) {
+            continue;
+        }
+
         $running = (float) $account['start'];
         $data = [];
-        foreach ($labels as $index => $label) {
+        foreach ($labels as $label) {
             $running += (float) ($account['inflows'][$label] ?? 0);
             $data[] = $running;
-            $totalData[$index] += $running;
         }
 
         $series[] = [
@@ -1029,12 +1027,16 @@ function moneta_forecast_chart_data(string $company, string $dateFrom, string $d
         ];
     }
 
-    if (count($series) > 1) {
-        array_unshift($series, [
-            'account_no' => '__total__',
-            'name' => 'Totaal',
-            'data' => array_values($totalData),
-        ]);
+    if ($series === []) {
+        return [
+            'labels' => [],
+            'series' => [],
+            'meta' => [
+                'installment_count' => count($installments),
+                'installment_total' => round($installmentTotal, 2),
+                'unassigned_count' => $unassignedCount,
+            ],
+        ];
     }
 
     return [
