@@ -752,7 +752,53 @@ function moneta_snapshot_planned_installments_for_company(string $company, strin
 }
 
 /**
- * Kosten uit JobBaselineLines (beter dan ProjectPosten: Currency_Code + Remaining_Total_Cost_LCY).
+ * Werkelijk geboekte kosten per project (FinRap Booked_Cost = JobLedgerEntries.Total_Cost_LCY).
+ *
+ * @param list<string> $jobNos
+ * @return array<string, float> job_no => booked_cost_lcy
+ */
+function moneta_fetch_booked_cost_lcy_by_job(string $company, array $jobNos, int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
+{
+    $wanted = [];
+    foreach ($jobNos as $jobNo) {
+        $jobNo = trim((string) $jobNo);
+        if ($jobNo !== '') {
+            $wanted[$jobNo] = true;
+        }
+    }
+    if ($wanted === []) {
+        return [];
+    }
+
+    $booked = [];
+    foreach (array_chunk(array_keys($wanted), 12) as $chunk) {
+        $filters = [];
+        foreach ($chunk as $jobNo) {
+            $filters[] = "Job_No eq '" . project_escape_odata_string($jobNo) . "'";
+        }
+
+        $rows = project_try_fetch_rows($company, 'JobLedgerEntries', [
+            '$select' => 'Job_No,Total_Cost_LCY',
+            '$filter' => '(' . implode(' or ', $filters) . ') and Total_Cost_LCY ne 0',
+        ], $ttl);
+
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $jobNo = trim((string) ($row['Job_No'] ?? ''));
+            if ($jobNo === '' || !isset($wanted[$jobNo])) {
+                continue;
+            }
+            $booked[$jobNo] = ($booked[$jobNo] ?? 0.0) + (float) ($row['Total_Cost_LCY'] ?? 0);
+        }
+    }
+
+    return $booked;
+}
+
+/**
+ * Kosten uit JobBaselineLines (voorcalculatie), verminderd met geboekte JobLedgerEntries.
  * Datum: lineair van max(projectstart, vandaag) tot projecteinde.
  *
  * @param list<array{job_no: string, starting_date: string, ending_date: string}> $openProjects
@@ -803,9 +849,8 @@ function moneta_fetch_baseline_costs_for_projects(
             continue;
         }
 
-        $remaining = (float) ($row['Remaining_Total_Cost_LCY'] ?? 0);
-        $total = (float) ($row['Total_Cost_LCY'] ?? 0);
-        $amount = abs($remaining) >= 0.000001 ? $remaining : $total;
+        // Voorcalculatie = Total_Cost_LCY; Remaining gebruiken we niet (dat regelen we via geboekte kosten).
+        $amount = (float) ($row['Total_Cost_LCY'] ?? 0);
         if (abs($amount) < 0.000001) {
             continue;
         }
@@ -822,9 +867,33 @@ function moneta_fetch_baseline_costs_for_projects(
         $totals[$key]['amount_lcy'] += $amount;
     }
 
+    $jobBaselineTotals = [];
+    foreach ($totals as $row) {
+        $jobNo = (string) $row['job_no'];
+        $jobBaselineTotals[$jobNo] = ($jobBaselineTotals[$jobNo] ?? 0.0) + (float) $row['amount_lcy'];
+    }
+
+    $bookedByJob = moneta_fetch_booked_cost_lcy_by_job($company, array_keys($jobBaselineTotals), $ttl);
+
     $costs = [];
     foreach ($totals as $totalRow) {
         $jobNo = (string) $totalRow['job_no'];
+        $jobBaseline = (float) ($jobBaselineTotals[$jobNo] ?? 0);
+        if ($jobBaseline < 0.000001) {
+            continue;
+        }
+
+        $booked = (float) ($bookedByJob[$jobNo] ?? 0);
+        $remainingJob = $jobBaseline - $booked;
+        if ($remainingJob <= 0.000001) {
+            continue;
+        }
+
+        $amount = (float) $totalRow['amount_lcy'] * ($remainingJob / $jobBaseline);
+        if (abs($amount) < 0.000001) {
+            continue;
+        }
+
         $project = $projectMap[$jobNo];
         $startingDate = moneta_parse_date((string) ($project['starting_date'] ?? ''));
         $endingDate = moneta_parse_date((string) ($project['ending_date'] ?? ''));
@@ -843,10 +912,12 @@ function moneta_fetch_baseline_costs_for_projects(
         $costs[] = [
             'job_no' => $jobNo,
             'currency_code' => (string) $totalRow['currency_code'],
-            'amount_lcy' => (float) $totalRow['amount_lcy'],
+            'amount_lcy' => $amount,
             'period_start' => $periodStart,
             'period_end' => $periodEnd,
             'bank_account_no' => '',
+            'baseline_lcy' => $jobBaseline,
+            'booked_lcy' => $booked,
         ];
     }
 
@@ -1348,7 +1419,7 @@ function moneta_linear_amount_by_date(
 /**
  * Prognose: startsaldi + termijnfacturen (in) − basislijnkosten (uit, lineair over projectperiode).
  *
- * Kostenbron: JobBaselineLines (Currency_Code; Remaining_Total_Cost_LCY / Total_Cost_LCY).
+ * Kostenbron: JobBaselineLines.Total_Cost_LCY − JobLedgerEntries.Total_Cost_LCY (FinRap Booked_Cost).
  * Bankkoppeling kosten: valuta-match. Datums: max(projectstart, vandaag) → projecteinde.
  *
  * @return array{labels: string[], series: list<array{account_no: string, name: string, data: list<float|null>}>, meta: array}
