@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Nightly job: Rekeningschema (G_L_Account) + termijnfacturen + basislijnkosten → SQLite.
+ * Nightly job: Rekeningschema + termijnfacturen + basislijnkosten → SQLite.
  * Wordt via GET/CLI aangeroepen door het bestaande nightly-script (geen UI).
  *
  * Voorbeeld: GET /Moneta/web/nightly.php
@@ -46,7 +46,7 @@ try {
     if (PHP_SAPI === 'cli') {
         echo 'OK snapshot_date=' . $payload['snapshot_date']
             . ' odata_ttl=' . MONETA_NIGHTLY_ODATA_TTL . "s\n";
-        echo "G_L_Account:\n";
+        echo "Rekeningschema:\n";
         foreach ($payload['gl'] as $row) {
             echo sprintf(
                 "  %s: accounts=%d stored=%d group_balances=%d\n",

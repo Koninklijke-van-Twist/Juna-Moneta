@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Technische backfill-pagina voor Rekeningschema-saldi (G_L_Account).
+ * Technische backfill-pagina voor Rekeningschema-saldi.
  * Niet gelinkt vanuit de UI — alleen via directe URL.
  *
  * Backfill: van opgegeven startdatum (verleden) tot de dag vóór de eerste
@@ -69,7 +69,7 @@ if ($action !== '' && $isAjax) {
                 'latest_snapshot_date' => $latest,
                 'backfill_end_date' => $rangeEnd,
                 'gl_account_catalog_count' => $accountCount,
-                'entity' => 'G_L_Account',
+                'entity' => MONETA_GL_ENTITY,
                 'odata_filter_template' => "Date_Filter eq '..YYYY-MM-DD'",
                 'select' => MONETA_GL_SELECT,
                 'ttl_seconds' => MONETA_NIGHTLY_ODATA_TTL,
@@ -116,7 +116,7 @@ if ($action !== '' && $isAjax) {
                     ? (new DateTimeImmutable($day))->modify('+1 day')->format('Y-m-d')
                     : null,
                 'message' => sprintf(
-                    'Day %s: fetched %d G_L_Account rows, stored %d GL + %d group balances in %d ms.',
+                    'Day %s: fetched %d Rekeningschema rows, stored %d GL + %d group balances in %d ms.',
                     $day,
                     (int) ($result['accounts'] ?? 0),
                     (int) ($result['stored'] ?? 0),
@@ -196,7 +196,7 @@ if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
 <div class="wrap">
     <h1>GL balance backfill</h1>
     <p class="muted">
-        Technische tool. Entity <code>G_L_Account</code> met
+        Technische tool. Entity <code>Rekeningschema</code> met
         <code>$filter=Date_Filter eq '..YYYY-MM-DD'</code>.
         Sparse opslag in <code>gl_balance_snapshots</code>. Geen menu-link — bookmark de URL.
     </p>

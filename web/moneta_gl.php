@@ -1,9 +1,10 @@
 <?php
 
 /**
- * Rekeningschema (G_L_Account) snapshots + grafiekgroepen.
+ * Rekeningschema snapshots + grafiekgroepen.
  */
 
+const MONETA_GL_ENTITY = 'Rekeningschema';
 const MONETA_GL_SELECT = 'No,Name,Balance_at_Date,Account_Type';
 const MONETA_SCHEMA_VERSION = 4;
 
@@ -123,10 +124,10 @@ function moneta_fetch_gl_accounts_for_date(string $company, string $asOfDate, in
 {
     $asOfDate = moneta_parse_date($asOfDate);
     if ($asOfDate === '') {
-        throw new InvalidArgumentException('Ongeldige datum voor G_L_Account Date_Filter.');
+        throw new InvalidArgumentException('Ongeldige datum voor Rekeningschema Date_Filter.');
     }
 
-    $rows = project_fetch_rows($company, 'G_L_Account', [
+    $rows = project_fetch_rows($company, MONETA_GL_ENTITY, [
         '$select' => MONETA_GL_SELECT,
         '$filter' => "Date_Filter eq '.." . $asOfDate . "'",
     ], $ttl);

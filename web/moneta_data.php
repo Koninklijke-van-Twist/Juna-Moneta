@@ -1023,7 +1023,7 @@ function moneta_run_nightly_jobs(string $snapshotDate = '', int $ttl = MONETA_NI
         }
 
         if (PHP_SAPI === 'cli') {
-            echo '[' . date('H:i:s') . "] GL snapshot (G_L_Account): {$company}\n";
+            echo '[' . date('H:i:s') . "] Rekeningschema snapshot: {$company}\n";
         }
 
         try {
