@@ -58,12 +58,15 @@ try {
         }
         echo "Installments:\n";
         foreach ($payload['installments'] as $row) {
+            $weights = is_array($row['job_gl_weights'] ?? null) ? $row['job_gl_weights'] : [];
             echo sprintf(
-                "  %s: open_projects=%d installments=%d stored=%d\n",
+                "  %s: open_projects=%d installments=%d stored=%d job_gl_weights=%d (jobs_with_weights=%d)\n",
                 (string) ($row['company'] ?? ''),
                 (int) ($row['open_projects'] ?? 0),
                 (int) ($row['installments'] ?? 0),
-                (int) ($row['stored'] ?? 0)
+                (int) ($row['stored'] ?? 0),
+                (int) ($weights['stored'] ?? 0),
+                (int) ($weights['jobs_with_weights'] ?? 0)
             );
         }
         echo "Baseline costs:\n";
