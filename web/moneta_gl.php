@@ -288,8 +288,12 @@ function moneta_store_gl_snapshot(string $company, string $snapshotDate, array $
     return $stored;
 }
 
-function moneta_snapshot_gl_balances_for_company(string $company, string $snapshotDate = '', int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
-{
+function moneta_snapshot_gl_balances_for_company(
+    string $company,
+    string $snapshotDate = '',
+    int $ttl = MONETA_NIGHTLY_ODATA_TTL,
+    bool $isBackfill = false
+): array {
     $snapshotDate = moneta_parse_date($snapshotDate);
     if ($snapshotDate === '') {
         $snapshotDate = date('Y-m-d');
@@ -298,6 +302,7 @@ function moneta_snapshot_gl_balances_for_company(string $company, string $snapsh
     $accounts = moneta_fetch_gl_accounts_for_date($company, $snapshotDate, $ttl);
     $stored = moneta_store_gl_snapshot($company, $snapshotDate, $accounts);
     $groupsStored = moneta_cache_group_balances_for_date($company, $snapshotDate);
+    moneta_touch_gl_backfill_ceiling($company, $snapshotDate, $isBackfill);
 
     return [
         'company' => $company,
@@ -306,6 +311,69 @@ function moneta_snapshot_gl_balances_for_company(string $company, string $snapsh
         'stored' => $stored,
         'group_balances_stored' => $groupsStored,
     ];
+}
+
+/**
+ * Ceiling = eerste nightly-snapshotdatum. Backfill mag deze niet naar het verleden trekken.
+ */
+function moneta_touch_gl_backfill_ceiling(string $company, string $snapshotDate, bool $isBackfill): void
+{
+    if ($isBackfill) {
+        return;
+    }
+    $snapshotDate = moneta_parse_date($snapshotDate);
+    if ($snapshotDate === '') {
+        return;
+    }
+    $pdo = moneta_pdo();
+    $key = 'gl_backfill_ceiling:' . $company;
+    $current = moneta_parse_date(moneta_meta_get($pdo, $key, ''));
+    if ($current === '') {
+        moneta_meta_set($pdo, $key, $snapshotDate);
+    }
+}
+
+/**
+ * Zorg dat er een ceiling staat (herstel na partial backfill zonder meta).
+ */
+function moneta_ensure_gl_backfill_ceiling(string $company): string
+{
+    $pdo = moneta_pdo();
+    $key = 'gl_backfill_ceiling:' . $company;
+    $ceiling = moneta_parse_date(moneta_meta_get($pdo, $key, ''));
+    if ($ceiling !== '') {
+        return $ceiling;
+    }
+
+    $first = moneta_first_gl_snapshot_date($company);
+    $latest = moneta_latest_gl_snapshot_date($company);
+    if ($first !== '' && $latest !== '' && $first < $latest) {
+        // Oudere backfill-dagen + nieuwere nightly: ceiling = live tip.
+        $ceiling = $latest;
+    } elseif ($latest !== '') {
+        $ceiling = $latest;
+    } elseif ($first !== '') {
+        $ceiling = $first;
+    } else {
+        return '';
+    }
+
+    moneta_meta_set($pdo, $key, $ceiling);
+
+    return $ceiling;
+}
+
+/**
+ * Einddatum backfill = dag vóór ceiling (niet vóór oudste backfill-dag).
+ */
+function moneta_backfill_range_end(string $company): string
+{
+    $ceiling = moneta_ensure_gl_backfill_ceiling($company);
+    if ($ceiling !== '') {
+        return (new DateTimeImmutable($ceiling))->modify('-1 day')->format('Y-m-d');
+    }
+
+    return (new DateTimeImmutable('today'))->modify('-1 day')->format('Y-m-d');
 }
 
 function moneta_first_gl_snapshot_date(string $company): string

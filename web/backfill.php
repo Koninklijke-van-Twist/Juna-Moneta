@@ -23,19 +23,6 @@ function moneta_backfill_h(?string $value): string
     return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
-/**
- * Einddatum backfill = dag vóór eerste snapshot, of gisteren als er nog geen data is.
- */
-function moneta_backfill_range_end(string $company): string
-{
-    $first = moneta_first_gl_snapshot_date($company);
-    if ($first !== '') {
-        return (new DateTimeImmutable($first))->modify('-1 day')->format('Y-m-d');
-    }
-
-    return (new DateTimeImmutable('today'))->modify('-1 day')->format('Y-m-d');
-}
-
 $isAjax = isset($_GET['ajax']) || isset($_POST['ajax'])
     || str_contains((string) ($_SERVER['HTTP_ACCEPT'] ?? ''), 'application/json');
 
@@ -60,6 +47,7 @@ if ($action !== '' && $isAjax) {
         if ($action === 'status') {
             $first = moneta_first_gl_snapshot_date($company);
             $latest = moneta_latest_gl_snapshot_date($company);
+            $ceiling = moneta_ensure_gl_backfill_ceiling($company);
             $rangeEnd = moneta_backfill_range_end($company);
             $accountCount = count(moneta_list_gl_accounts($company));
             echo json_encode([
@@ -67,6 +55,7 @@ if ($action !== '' && $isAjax) {
                 'company' => $company,
                 'first_snapshot_date' => $first,
                 'latest_snapshot_date' => $latest,
+                'backfill_ceiling_date' => $ceiling,
                 'backfill_end_date' => $rangeEnd,
                 'gl_account_catalog_count' => $accountCount,
                 'entity' => MONETA_GL_ENTITY,
@@ -75,9 +64,10 @@ if ($action !== '' && $isAjax) {
                 'ttl_seconds' => MONETA_NIGHTLY_ODATA_TTL,
                 'storage' => 'SQLite gl_balance_snapshots (sparse: ongewijzigd t.o.v. vorige dag wordt overgeslagen)',
                 'notes' => [
-                    'Range is altijd verleden: start ≤ end ≤ (eerste snapshot − 1 dag).',
+                    'backfill_end_date = backfill_ceiling − 1 (ceiling = eerste nightly-dag, niet oudste backfill-dag).',
+                    'run_day krijgt end_date mee zodat de range tijdens de run niet opschuift.',
                     'Per AJAX-call wordt precies één dag verwerkt (fetch → store).',
-                    'Onderbreken mag: herstart met dezelfde start; reeds gevulde dagen worden opnieuw bekeken (sparse).',
+                    'Onderbreken mag: herstart met dezelfde start/end; reeds gevulde dagen blijven staan.',
                 ],
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             exit;
@@ -92,15 +82,25 @@ if ($action !== '' && $isAjax) {
             if ($day >= $today) {
                 throw new InvalidArgumentException("Backfill alleen voor verleden dagen (gevraagd={$day}, today={$today}).");
             }
-            $rangeEnd = moneta_backfill_range_end($company);
+
+            // Vast eind van deze run (client locked bij start). Zo schuift het einde niet op
+            // wanneer de net opgeslagen backfill-dag de nieuwe MIN(snapshot) wordt.
+            $rangeEnd = moneta_parse_date((string) ($_GET['end_date'] ?? $_POST['end_date'] ?? ''));
+            if ($rangeEnd === '') {
+                $rangeEnd = moneta_backfill_range_end($company);
+            }
+            $suggestedEnd = moneta_backfill_range_end($company);
+            if ($rangeEnd > $suggestedEnd) {
+                $rangeEnd = $suggestedEnd;
+            }
             if ($day > $rangeEnd) {
                 throw new InvalidArgumentException(
-                    "Datum {$day} ligt na backfill-einde {$rangeEnd} (eerste snapshot − 1 of gisteren)."
+                    "Datum {$day} ligt na backfill-einde {$rangeEnd} (locked end_date / ceiling−1)."
                 );
             }
 
             $startedAt = hrtime(true);
-            $result = moneta_snapshot_gl_balances_for_company($company, $day, MONETA_NIGHTLY_ODATA_TTL);
+            $result = moneta_snapshot_gl_balances_for_company($company, $day, MONETA_NIGHTLY_ODATA_TTL, true);
             $durationMs = (int) round((hrtime(true) - $startedAt) / 1_000_000);
 
             echo json_encode([
@@ -142,6 +142,7 @@ if ($action !== '' && $isAjax) {
 auth_set_current_company_context($company);
 $firstSnapshot = $company !== '' ? moneta_first_gl_snapshot_date($company) : '';
 $latestSnapshot = $company !== '' ? moneta_latest_gl_snapshot_date($company) : '';
+$ceilingSnapshot = $company !== '' ? moneta_ensure_gl_backfill_ceiling($company) : '';
 $rangeEnd = $company !== '' ? moneta_backfill_range_end($company) : '';
 $defaultStart = (new DateTimeImmutable('today'))->modify('-1 year')->format('Y-m-d');
 if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
@@ -207,7 +208,8 @@ if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
             <div>company: <code><?= moneta_backfill_h($company) ?></code></div>
             <div>first_snapshot_date: <code><?= moneta_backfill_h($firstSnapshot !== '' ? $firstSnapshot : '(none)') ?></code></div>
             <div>latest_snapshot_date: <code><?= moneta_backfill_h($latestSnapshot !== '' ? $latestSnapshot : '(none)') ?></code></div>
-            <div>backfill_end_date (= first−1 of yesterday): <code><?= moneta_backfill_h($rangeEnd) ?></code></div>
+            <div>backfill_ceiling_date: <code><?= moneta_backfill_h($ceilingSnapshot !== '' ? $ceilingSnapshot : '(none)') ?></code></div>
+            <div>backfill_end_date (= ceiling−1): <code><?= moneta_backfill_h($rangeEnd) ?></code></div>
             <div>odata_ttl: <code><?= (int) MONETA_NIGHTLY_ODATA_TTL ?>s</code></div>
         </div>
     </div>
@@ -312,21 +314,26 @@ if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
         return data;
     }
 
-    async function refreshStatus() {
+    async function refreshStatus(options) {
+        options = options || {};
         const company = companyEl.value;
         log('GET status company=' + company, 'log-info');
         const data = await api('status', { company: company });
-        endEl.value = data.backfill_end_date || '';
+        if (!options.keepEndDate) {
+            endEl.value = data.backfill_end_date || '';
+        }
         statusMeta.innerHTML =
             '<div>company: <code>' + data.company + '</code></div>' +
             '<div>first_snapshot_date: <code>' + (data.first_snapshot_date || '(none)') + '</code></div>' +
             '<div>latest_snapshot_date: <code>' + (data.latest_snapshot_date || '(none)') + '</code></div>' +
+            '<div>backfill_ceiling_date: <code>' + (data.backfill_ceiling_date || '(none)') + '</code></div>' +
             '<div>backfill_end_date: <code>' + (data.backfill_end_date || '') + '</code></div>' +
             '<div>gl_account_catalog_count: <code>' + data.gl_account_catalog_count + '</code></div>' +
             '<div>filter: <code>' + data.odata_filter_template + '</code></div>' +
             '<div>select: <code>' + data.select + '</code></div>' +
             '<div>storage: <code>' + data.storage + '</code></div>';
         log('status ok first=' + (data.first_snapshot_date || 'none')
+            + ' ceiling=' + (data.backfill_ceiling_date || 'none')
             + ' end=' + data.backfill_end_date
             + ' catalog=' + data.gl_account_catalog_count, 'log-ok');
         return data;
@@ -357,7 +364,7 @@ if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
             const totalDays = daysBetween(cursor, end) + 1;
             let done = 0;
             log('Start backfill company=' + company + ' range=' + cursor + '..' + end
-                + ' (' + totalDays + ' days), sequential AJAX', 'log-info');
+                + ' (' + totalDays + ' days), sequential AJAX; end_date locked for this run', 'log-info');
 
             while (cursor <= end) {
                 if (stopRequested) {
@@ -365,7 +372,11 @@ if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
                     break;
                 }
                 progressLabel.textContent = 'Running ' + cursor + ' (' + (done + 1) + '/' + totalDays + ')…';
-                const dayResult = await api('run_day', { company: company, date: cursor });
+                const dayResult = await api('run_day', {
+                    company: company,
+                    date: cursor,
+                    end_date: end
+                });
                 done++;
                 const pct = Math.round((done / totalDays) * 100);
                 progressBar.style.width = pct + '%';
@@ -377,7 +388,7 @@ if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
             progressLabel.textContent = stopRequested
                 ? 'Stopped. Processed ' + done + '/' + totalDays + ' days. Data tot hier is opgeslagen.'
                 : 'Finished. Processed ' + done + '/' + totalDays + ' days.';
-            await refreshStatus();
+            await refreshStatus({ keepEndDate: true });
         } catch (error) {
             log('FAIL: ' + (error && error.message ? error.message : error), 'log-err');
             progressLabel.textContent = 'Failed — zie log. Reeds opgeslagen dagen blijven staan.';
