@@ -16,6 +16,8 @@ const MONETA_UNASSIGNED_ACCOUNT_NO = '__unassigned__';
 /** OData-cache tijdens nightly: 5 uur, zodat hertesten snel via cache gaat. */
 const MONETA_NIGHTLY_ODATA_TTL = 18000;
 
+require_once __DIR__ . '/moneta_gl.php';
+
 /**
  * Functies
  */
@@ -78,24 +80,7 @@ function moneta_ensure_column(PDO $pdo, string $table, string $column, string $d
 
 function moneta_ensure_schema(PDO $pdo): void
 {
-    $pdo->exec(
-        'CREATE TABLE IF NOT EXISTS bank_balance_snapshots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            company TEXT NOT NULL,
-            account_no TEXT NOT NULL,
-            account_name TEXT NOT NULL,
-            balance_lcy REAL NOT NULL,
-            currency_code TEXT NOT NULL DEFAULT \'\',
-            snapshot_date TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            UNIQUE(company, account_no, snapshot_date)
-        )'
-    );
-    moneta_ensure_column($pdo, 'bank_balance_snapshots', 'currency_code', "TEXT NOT NULL DEFAULT ''");
-    $pdo->exec(
-        'CREATE INDEX IF NOT EXISTS idx_bank_balance_company_date
-         ON bank_balance_snapshots (company, snapshot_date)'
-    );
+    moneta_ensure_gl_schema($pdo);
 
     $pdo->exec(
         'CREATE TABLE IF NOT EXISTS planned_installments (
@@ -1021,7 +1006,7 @@ function moneta_run_nightly_jobs(string $snapshotDate = '', int $ttl = MONETA_NI
     $ttl = max(MONETA_NIGHTLY_ODATA_TTL, (int) $ttl);
 
     $companies = project_companies_for_page($ttl);
-    $bankResults = [];
+    $glResults = [];
     $installmentResults = [];
     $costResults = [];
     $errors = [];
@@ -1033,15 +1018,15 @@ function moneta_run_nightly_jobs(string $snapshotDate = '', int $ttl = MONETA_NI
         }
 
         if (PHP_SAPI === 'cli') {
-            echo '[' . date('H:i:s') . "] bank snapshot: {$company}\n";
+            echo '[' . date('H:i:s') . "] GL snapshot (G_L_Account): {$company}\n";
         }
 
         try {
-            $bankResults[] = moneta_snapshot_bank_balances_for_company($company, $snapshotDate, $ttl);
+            $glResults[] = moneta_snapshot_gl_balances_for_company($company, $snapshotDate, $ttl);
         } catch (Throwable $error) {
             $errors[] = [
                 'company' => $company,
-                'step' => 'bank',
+                'step' => 'gl',
                 'error' => $error->getMessage(),
             ];
             continue;
@@ -1091,7 +1076,8 @@ function moneta_run_nightly_jobs(string $snapshotDate = '', int $ttl = MONETA_NI
 
     return [
         'snapshot_date' => $snapshotDate,
-        'bank' => $bankResults,
+        'gl' => $glResults,
+        'bank' => $glResults, // backwards compat for oude callers
         'installments' => $installmentResults,
         'baseline_costs' => $costResults,
         'errors' => $errors,
@@ -1107,7 +1093,7 @@ function moneta_run_nightly_bank_snapshots(string $snapshotDate = '', int $ttl =
 
     return [
         'snapshot_date' => $run['snapshot_date'],
-        'results' => $run['bank'],
+        'results' => $run['gl'] ?? $run['bank'] ?? [],
         'errors' => $run['errors'],
     ];
 }
@@ -1435,7 +1421,7 @@ function moneta_forecast_chart_data(string $company, string $dateFrom, string $d
         $dateTo = $dateFrom;
     }
 
-    $accounts = moneta_latest_bank_balances($company, $dateFrom);
+    $accounts = moneta_latest_group_balances($company, $dateFrom);
     $installments = moneta_load_planned_installments($company, $dateFrom, $dateTo);
     $baselineCosts = moneta_load_baseline_costs($company, $dateFrom, $dateTo);
 

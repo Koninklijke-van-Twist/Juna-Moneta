@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Nightly job: banksaldi + termijnfacturen + basislijnkosten van open projecten → SQLite.
+ * Nightly job: Rekeningschema (G_L_Account) + termijnfacturen + basislijnkosten → SQLite.
  * Wordt via GET/CLI aangeroepen door het bestaande nightly-script (geen UI).
  *
  * Voorbeeld: GET /Moneta/web/nightly.php
@@ -28,7 +28,7 @@ if ($snapshotDate === '' && PHP_SAPI === 'cli') {
 
 try {
     $run = moneta_run_nightly_jobs($snapshotDate, MONETA_NIGHTLY_ODATA_TTL);
-    $hasResults = ($run['bank'] ?? []) !== []
+    $hasResults = ($run['gl'] ?? []) !== []
         || ($run['installments'] ?? []) !== []
         || ($run['baseline_costs'] ?? []) !== [];
     $payload = [
@@ -37,7 +37,7 @@ try {
         'snapshot_date' => (string) ($run['snapshot_date'] ?? ''),
         'odata_ttl_seconds' => MONETA_NIGHTLY_ODATA_TTL,
         'total_duration_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
-        'bank' => $run['bank'] ?? [],
+        'gl' => $run['gl'] ?? [],
         'installments' => $run['installments'] ?? [],
         'baseline_costs' => $run['baseline_costs'] ?? [],
         'errors' => $run['errors'] ?? [],
@@ -46,8 +46,8 @@ try {
     if (PHP_SAPI === 'cli') {
         echo 'OK snapshot_date=' . $payload['snapshot_date']
             . ' odata_ttl=' . MONETA_NIGHTLY_ODATA_TTL . "s\n";
-        echo "Bank:\n";
-        foreach ($payload['bank'] as $row) {
+        echo "G_L_Account:\n";
+        foreach ($payload['gl'] as $row) {
             echo sprintf(
                 "  %s: accounts=%d stored=%d\n",
                 (string) ($row['company'] ?? ''),
