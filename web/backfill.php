@@ -109,16 +109,18 @@ if ($action !== '' && $isAjax) {
                 'date' => $day,
                 'accounts_fetched' => (int) ($result['accounts'] ?? 0),
                 'rows_stored' => (int) ($result['stored'] ?? 0),
+                'group_balances_stored' => (int) ($result['group_balances_stored'] ?? 0),
                 'duration_ms' => $durationMs,
                 'backfill_end_date' => $rangeEnd,
                 'next_hint' => $day < $rangeEnd
                     ? (new DateTimeImmutable($day))->modify('+1 day')->format('Y-m-d')
                     : null,
                 'message' => sprintf(
-                    'Day %s: fetched %d G_L_Account rows, stored %d changed balances in %d ms.',
+                    'Day %s: fetched %d G_L_Account rows, stored %d GL + %d group balances in %d ms.',
                     $day,
                     (int) ($result['accounts'] ?? 0),
                     (int) ($result['stored'] ?? 0),
+                    (int) ($result['group_balances_stored'] ?? 0),
                     $durationMs
                 ),
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

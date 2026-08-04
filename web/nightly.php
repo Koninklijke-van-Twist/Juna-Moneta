@@ -49,10 +49,11 @@ try {
         echo "G_L_Account:\n";
         foreach ($payload['gl'] as $row) {
             echo sprintf(
-                "  %s: accounts=%d stored=%d\n",
+                "  %s: accounts=%d stored=%d group_balances=%d\n",
                 (string) ($row['company'] ?? ''),
                 (int) ($row['accounts'] ?? 0),
-                (int) ($row['stored'] ?? 0)
+                (int) ($row['stored'] ?? 0),
+                (int) ($row['group_balances_stored'] ?? 0)
             );
         }
         echo "Installments:\n";

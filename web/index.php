@@ -282,15 +282,17 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
             </button>
         </div>
 
-        <?php if ($hasChartData): ?>
-            <div class="moneta-chart-wrap">
-                <canvas id="moneta-gl-chart" aria-label="<?= moneta_h(LOC('moneta.chart.gl_title')) ?>"></canvas>
-            </div>
-        <?php elseif (!$hasGroups): ?>
-            <div class="moneta-empty"><?= moneta_h(LOC('moneta.empty.groups')) ?></div>
-        <?php else: ?>
-            <div class="moneta-empty"><?= moneta_h(LOC('moneta.empty.gl')) ?></div>
-        <?php endif; ?>
+        <div id="moneta-gl-chart-host">
+            <?php if ($hasChartData): ?>
+                <div class="moneta-chart-wrap">
+                    <canvas id="moneta-gl-chart" aria-label="<?= moneta_h(LOC('moneta.chart.gl_title')) ?>"></canvas>
+                </div>
+            <?php elseif (!$hasGroups): ?>
+                <div class="moneta-empty"><?= moneta_h(LOC('moneta.empty.groups')) ?></div>
+            <?php else: ?>
+                <div class="moneta-empty"><?= moneta_h(LOC('moneta.empty.gl')) ?></div>
+            <?php endif; ?>
+        </div>
     </section>
 
     <section class="moneta-card">
@@ -399,84 +401,89 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
         }).format(number);
     }
 
-    function renderLineChart(canvasId, chartPayload) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas || typeof Chart === 'undefined' || !chartPayload || !Array.isArray(chartPayload.labels) || chartPayload.labels.length === 0) {
-            return;
-        }
+    function chartDatasetOptions(serie, index) {
+        const color = palette[index % palette.length];
+        return {
+            label: serie.name || serie.account_no || ('Serie ' + (index + 1)),
+            data: serie.data || [],
+            borderColor: color,
+            backgroundColor: color,
+            tension: 0.25,
+            pointRadius: 2,
+            pointHoverRadius: 4,
+            borderWidth: 2,
+            spanGaps: true
+        };
+    }
 
-        const datasets = (chartPayload.series || []).map(function (serie, index) {
-            const color = palette[index % palette.length];
-            return {
-                label: serie.name || serie.account_no || ('Serie ' + (index + 1)),
-                data: serie.data || [],
-                borderColor: color,
-                backgroundColor: color,
-                tension: 0.25,
-                pointRadius: 2,
-                pointHoverRadius: 4,
-                borderWidth: 2,
-                spanGaps: true
-            };
-        });
-
-        new Chart(canvas, {
-            type: 'line',
-            data: {
-                labels: chartPayload.labels.map(formatDateLabel),
-                datasets: datasets
+    function lineChartOptions() {
+        return {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'nearest',
+                intersect: false
             },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: {
-                    mode: 'nearest',
-                    intersect: false
-                },
-                plugins: {
-                    legend: {
-                        position: 'bottom',
-                        labels: {
-                            boxWidth: 12,
-                            usePointStyle: true
-                        }
-                    },
-                    tooltip: {
-                        callbacks: {
-                            label: function (context) {
-                                const label = context.dataset.label || '';
-                                return label + ': ' + formatEuro(context.parsed.y);
-                            }
-                        }
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    labels: {
+                        boxWidth: 12,
+                        usePointStyle: true
                     }
                 },
-                scales: {
-                    x: {
-                        ticks: {
-                            maxRotation: 0,
-                            autoSkip: true,
-                            maxTicksLimit: 8
-                        },
-                        grid: {
-                            display: false
+                tooltip: {
+                    callbacks: {
+                        label: function (context) {
+                            const label = context.dataset.label || '';
+                            return label + ': ' + formatEuro(context.parsed.y);
                         }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        maxRotation: 0,
+                        autoSkip: true,
+                        maxTicksLimit: 8
                     },
-                    y: {
-                        ticks: {
-                            callback: function (value) {
-                                return formatEuro(value);
-                            }
+                    grid: {
+                        display: false
+                    }
+                },
+                y: {
+                    ticks: {
+                        callback: function (value) {
+                            return formatEuro(value);
                         }
                     }
                 }
             }
+        };
+    }
+
+    function createLineChart(canvas, chartPayload) {
+        if (!canvas || typeof Chart === 'undefined' || !chartPayload || !Array.isArray(chartPayload.labels) || chartPayload.labels.length === 0) {
+            return null;
+        }
+
+        return new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels: chartPayload.labels.map(formatDateLabel),
+                datasets: (chartPayload.series || []).map(chartDatasetOptions)
+            },
+            options: lineChartOptions()
         });
     }
 
-    renderLineChart('moneta-gl-chart', <?= $chartJson ?>);
-    renderLineChart('moneta-forecast-chart', <?= $forecastJson ?>);
+    let glChart = createLineChart(document.getElementById('moneta-gl-chart'), <?= $chartJson ?>);
+    createLineChart(document.getElementById('moneta-forecast-chart'), <?= $forecastJson ?>);
 
     const company = <?= json_encode($company, JSON_UNESCAPED_UNICODE) ?>;
+    const historyFrom = <?= json_encode($dateFrom, JSON_UNESCAPED_UNICODE) ?>;
+    const historyTo = <?= json_encode($dateTo, JSON_UNESCAPED_UNICODE) ?>;
     const i18n = {
         saving: <?= json_encode(LOC('moneta.groups.saving'), JSON_UNESCAPED_UNICODE) ?>,
         saved: <?= json_encode(LOC('moneta.groups.saved'), JSON_UNESCAPED_UNICODE) ?>,
@@ -486,13 +493,18 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
         addAccount: <?= json_encode(LOC('moneta.groups.add_account'), JSON_UNESCAPED_UNICODE) ?>,
         removeAccount: <?= json_encode(LOC('moneta.groups.remove_account'), JSON_UNESCAPED_UNICODE) ?>,
         noAccounts: <?= json_encode(LOC('moneta.picker.empty'), JSON_UNESCAPED_UNICODE) ?>,
-        reloadHint: <?= json_encode(LOC('moneta.groups.reload_hint'), JSON_UNESCAPED_UNICODE) ?>
+        emptyGroups: <?= json_encode(LOC('moneta.empty.groups'), JSON_UNESCAPED_UNICODE) ?>,
+        emptyGl: <?= json_encode(LOC('moneta.empty.gl'), JSON_UNESCAPED_UNICODE) ?>,
+        chartTitle: <?= json_encode(LOC('moneta.chart.gl_title'), JSON_UNESCAPED_UNICODE) ?>,
+        refreshing: <?= json_encode(LOC('moneta.groups.refreshing'), JSON_UNESCAPED_UNICODE) ?>
     };
 
     let groups = <?= $groupsJson ?>;
     let glAccounts = null;
     let pickerGroupIndex = null;
     let saveTimer = null;
+    let savePromise = null;
+    let groupsDirty = false;
     let tempId = -1;
 
     const groupsModal = document.getElementById('moneta-groups-modal');
@@ -501,6 +513,7 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
     const saveState = document.getElementById('moneta-groups-save-state');
     const pickerList = document.getElementById('moneta-picker-list');
     const pickerSearch = document.getElementById('moneta-picker-search');
+    const glChartHost = document.getElementById('moneta-gl-chart-host');
 
     function openModal(el) {
         el.classList.add('is-open');
@@ -525,9 +538,22 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
     }
 
     function scheduleSave() {
+        groupsDirty = true;
         clearTimeout(saveTimer);
         saveState.textContent = i18n.saving;
-        saveTimer = setTimeout(persistGroups, 400);
+        saveTimer = setTimeout(function () {
+            savePromise = persistGroups();
+        }, 400);
+    }
+
+    async function flushPendingSave() {
+        clearTimeout(saveTimer);
+        if (savePromise) {
+            await savePromise;
+        } else if (groupsDirty) {
+            savePromise = persistGroups();
+            await savePromise;
+        }
     }
 
     async function persistGroups() {
@@ -546,8 +572,79 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
                 throw new Error((data && data.error) || ('HTTP ' + response.status));
             }
             groups = data.groups || [];
+            groupsDirty = true;
             renderGroups();
-            saveState.textContent = i18n.saved + ' — ' + i18n.reloadHint;
+            saveState.textContent = i18n.saved;
+            return true;
+        } catch (error) {
+            saveState.textContent = i18n.saveFailed + ': ' + (error.message || error);
+            return false;
+        } finally {
+            savePromise = null;
+        }
+    }
+
+    function updateGlChart(chartPayload) {
+        const hasSeries = chartPayload
+            && Array.isArray(chartPayload.labels)
+            && chartPayload.labels.length > 0
+            && Array.isArray(chartPayload.series)
+            && chartPayload.series.length > 0;
+
+        if (glChart) {
+            glChart.destroy();
+            glChart = null;
+        }
+
+        if (!hasSeries) {
+            const empty = document.createElement('div');
+            empty.className = 'moneta-empty';
+            empty.textContent = groups.length === 0 ? i18n.emptyGroups : i18n.emptyGl;
+            glChartHost.innerHTML = '';
+            glChartHost.appendChild(empty);
+            return;
+        }
+
+        glChartHost.innerHTML = '';
+        const wrap = document.createElement('div');
+        wrap.className = 'moneta-chart-wrap';
+        const canvas = document.createElement('canvas');
+        canvas.id = 'moneta-gl-chart';
+        canvas.setAttribute('aria-label', i18n.chartTitle);
+        wrap.appendChild(canvas);
+        glChartHost.appendChild(wrap);
+        glChart = createLineChart(canvas, chartPayload);
+    }
+
+    async function refreshGlChart() {
+        saveState.textContent = i18n.refreshing;
+        const url = 'moneta_api.php?action=chart_data'
+            + '&company=' + encodeURIComponent(company)
+            + '&date_from=' + encodeURIComponent(historyFrom)
+            + '&date_to=' + encodeURIComponent(historyTo);
+        const response = await fetch(url, {
+            headers: { 'Accept': 'application/json' },
+            credentials: 'same-origin'
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+            throw new Error((data && data.error) || ('HTTP ' + response.status));
+        }
+        if (Array.isArray(data.groups)) {
+            groups = data.groups;
+        }
+        updateGlChart(data.chart || { labels: [], series: [] });
+        saveState.textContent = i18n.saved;
+    }
+
+    async function closeGroupsModalAndRefresh() {
+        closeModal(groupsModal);
+        try {
+            await flushPendingSave();
+            if (groupsDirty) {
+                await refreshGlChart();
+                groupsDirty = false;
+            }
         } catch (error) {
             saveState.textContent = i18n.saveFailed + ': ' + (error.message || error);
         }
@@ -699,7 +796,11 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
             await ensureGlAccounts();
             renderPicker('');
         } catch (error) {
-            pickerList.innerHTML = '<div class="moneta-empty">' + (error.message || error) + '</div>';
+            const empty = document.createElement('div');
+            empty.className = 'moneta-empty';
+            empty.textContent = error.message || String(error);
+            pickerList.innerHTML = '';
+            pickerList.appendChild(empty);
         }
     }
 
@@ -709,7 +810,7 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
         openModal(groupsModal);
     });
     document.getElementById('moneta-close-groups').addEventListener('click', function () {
-        closeModal(groupsModal);
+        closeGroupsModalAndRefresh();
     });
     document.getElementById('moneta-close-picker').addEventListener('click', function () {
         closeModal(pickerModal);
@@ -729,7 +830,7 @@ $unassignedCount = (int) ($forecastMeta['unassigned_count'] ?? 0);
     });
     groupsModal.addEventListener('click', function (event) {
         if (event.target === groupsModal) {
-            closeModal(groupsModal);
+            closeGroupsModalAndRefresh();
         }
     });
     pickerModal.addEventListener('click', function (event) {

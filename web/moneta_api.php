@@ -78,6 +78,26 @@ try {
         ]);
     }
 
+    if ($action === 'chart_data' && $method === 'GET') {
+        $dateFrom = moneta_parse_date((string) ($_GET['date_from'] ?? ''));
+        $dateTo = moneta_parse_date((string) ($_GET['date_to'] ?? ''));
+        if ($dateFrom === '') {
+            $dateFrom = moneta_default_date_from();
+        }
+        if ($dateTo === '') {
+            $dateTo = moneta_default_date_to();
+        }
+        $chart = moneta_group_chart_data($company, $dateFrom, $dateTo);
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'date_from' => $dateFrom,
+            'date_to' => $dateTo,
+            'chart' => $chart,
+            'groups' => moneta_list_chart_groups($company),
+        ]);
+    }
+
     moneta_api_error('Onbekende action of methode.', 404);
 } catch (Throwable $error) {
     moneta_api_error($error->getMessage(), 500);

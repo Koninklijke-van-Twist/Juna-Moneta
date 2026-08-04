@@ -34,6 +34,11 @@ function moneta_db_path(): string
 
 function moneta_pdo(): PDO
 {
+    static $pdo = null;
+    if ($pdo instanceof PDO) {
+        return $pdo;
+    }
+
     if (!extension_loaded('pdo_sqlite')) {
         throw new RuntimeException('De PDO SQLite-extensie is niet beschikbaar.');
     }
