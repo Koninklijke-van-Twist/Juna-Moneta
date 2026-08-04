@@ -49,6 +49,7 @@ if ($action !== '' && $isAjax) {
             $latest = moneta_latest_gl_snapshot_date($company);
             $ceiling = moneta_ensure_gl_backfill_ceiling($company);
             $rangeEnd = moneta_backfill_range_end($company);
+            $earliestPosting = moneta_earliest_gl_posting_date($company, 600);
             $accountCount = count(moneta_list_gl_accounts($company));
             echo json_encode([
                 'ok' => true,
@@ -57,6 +58,7 @@ if ($action !== '' && $isAjax) {
                 'latest_snapshot_date' => $latest,
                 'backfill_ceiling_date' => $ceiling,
                 'backfill_end_date' => $rangeEnd,
+                'earliest_gl_posting_date' => $earliestPosting,
                 'gl_account_catalog_count' => $accountCount,
                 'entity' => MONETA_GL_ENTITY,
                 'odata_filter_template' => "Date_Filter eq '..YYYY-MM-DD'",
@@ -64,10 +66,10 @@ if ($action !== '' && $isAjax) {
                 'ttl_seconds' => MONETA_NIGHTLY_ODATA_TTL,
                 'storage' => 'SQLite gl_balance_snapshots (sparse: ongewijzigd t.o.v. vorige dag wordt overgeslagen)',
                 'notes' => [
-                    'backfill_end_date = backfill_ceiling − 1 (ceiling = eerste nightly-dag, niet oudste backfill-dag).',
+                    'Date_Filter werkt: Balance_at_Date is cumulatief t/m de gekozen dag.',
+                    'Vóór earliest_gl_posting_date bestaan er geen G_LEntries → saldi zijn terecht 0.',
+                    'backfill_end_date = backfill_ceiling − 1 (ceiling = eerste nightly-dag).',
                     'run_day krijgt end_date mee zodat de range tijdens de run niet opschuift.',
-                    'Per AJAX-call wordt precies één dag verwerkt (fetch → store).',
-                    'Onderbreken mag: herstart met dezelfde start/end; reeds gevulde dagen blijven staan.',
                 ],
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             exit;
@@ -144,7 +146,13 @@ $firstSnapshot = $company !== '' ? moneta_first_gl_snapshot_date($company) : '';
 $latestSnapshot = $company !== '' ? moneta_latest_gl_snapshot_date($company) : '';
 $ceilingSnapshot = $company !== '' ? moneta_ensure_gl_backfill_ceiling($company) : '';
 $rangeEnd = $company !== '' ? moneta_backfill_range_end($company) : '';
-$defaultStart = (new DateTimeImmutable('today'))->modify('-1 year')->format('Y-m-d');
+$earliestPosting = '';
+try {
+    $earliestPosting = $company !== '' ? moneta_earliest_gl_posting_date($company, 600) : '';
+} catch (Throwable $ignored) {
+    $earliestPosting = '';
+}
+$defaultStart = $earliestPosting !== '' ? $earliestPosting : (new DateTimeImmutable('today'))->modify('-1 year')->format('Y-m-d');
 if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
     $defaultStart = $rangeEnd;
 }
@@ -200,6 +208,7 @@ if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
         Technische tool. Entity <code>Rekeningschema</code> met
         <code>$filter=Date_Filter eq '..YYYY-MM-DD'</code>.
         Sparse opslag in <code>gl_balance_snapshots</code>. Geen menu-link — bookmark de URL.
+        Backfill alleen vanaf de eerste G_LEntries-boekingsdatum; eerder is Balance_at_Date terecht 0.
     </p>
 
     <div class="panel">
@@ -208,6 +217,7 @@ if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
             <div>company: <code><?= moneta_backfill_h($company) ?></code></div>
             <div>first_snapshot_date: <code><?= moneta_backfill_h($firstSnapshot !== '' ? $firstSnapshot : '(none)') ?></code></div>
             <div>latest_snapshot_date: <code><?= moneta_backfill_h($latestSnapshot !== '' ? $latestSnapshot : '(none)') ?></code></div>
+            <div>earliest_gl_posting_date: <code><?= moneta_backfill_h($earliestPosting !== '' ? $earliestPosting : '(detecting…)') ?></code></div>
             <div>backfill_ceiling_date: <code><?= moneta_backfill_h($ceilingSnapshot !== '' ? $ceilingSnapshot : '(none)') ?></code></div>
             <div>backfill_end_date (= ceiling−1): <code><?= moneta_backfill_h($rangeEnd) ?></code></div>
             <div>odata_ttl: <code><?= (int) MONETA_NIGHTLY_ODATA_TTL ?>s</code></div>
@@ -322,10 +332,17 @@ if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
         if (!options.keepEndDate) {
             endEl.value = data.backfill_end_date || '';
         }
+        if (!options.keepStartDate && data.earliest_gl_posting_date) {
+            const earliest = data.earliest_gl_posting_date;
+            if (!startEl.value || startEl.value < earliest) {
+                startEl.value = earliest;
+            }
+        }
         statusMeta.innerHTML =
             '<div>company: <code>' + data.company + '</code></div>' +
             '<div>first_snapshot_date: <code>' + (data.first_snapshot_date || '(none)') + '</code></div>' +
             '<div>latest_snapshot_date: <code>' + (data.latest_snapshot_date || '(none)') + '</code></div>' +
+            '<div>earliest_gl_posting_date: <code>' + (data.earliest_gl_posting_date || '(none)') + '</code></div>' +
             '<div>backfill_ceiling_date: <code>' + (data.backfill_ceiling_date || '(none)') + '</code></div>' +
             '<div>backfill_end_date: <code>' + (data.backfill_end_date || '') + '</code></div>' +
             '<div>gl_account_catalog_count: <code>' + data.gl_account_catalog_count + '</code></div>' +
@@ -333,9 +350,15 @@ if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
             '<div>select: <code>' + data.select + '</code></div>' +
             '<div>storage: <code>' + data.storage + '</code></div>';
         log('status ok first=' + (data.first_snapshot_date || 'none')
+            + ' earliest_posting=' + (data.earliest_gl_posting_date || 'none')
             + ' ceiling=' + (data.backfill_ceiling_date || 'none')
             + ' end=' + data.backfill_end_date
             + ' catalog=' + data.gl_account_catalog_count, 'log-ok');
+        if (Array.isArray(data.notes)) {
+            data.notes.forEach(function (note) {
+                log('note: ' + note, 'log-info');
+            });
+        }
         return data;
     }
 
@@ -354,6 +377,12 @@ if ($rangeEnd !== '' && $defaultStart > $rangeEnd) {
             const company = companyEl.value;
             let cursor = startEl.value;
             const end = endEl.value || status.backfill_end_date;
+            const earliest = status.earliest_gl_posting_date || '';
+            if (earliest && cursor < earliest) {
+                log('Clamping start_date from ' + cursor + ' to earliest_gl_posting_date ' + earliest, 'log-info');
+                cursor = earliest;
+                startEl.value = earliest;
+            }
             if (!cursor || !end) {
                 throw new Error('start_date en end_date zijn verplicht.');
             }

@@ -6,6 +6,7 @@
 
 const MONETA_GL_ENTITY = 'Rekeningschema';
 const MONETA_GL_SELECT = 'No,Name,Balance_at_Date,Account_Type';
+const MONETA_GL_ENTRIES_ENTITY = 'G_LEntries';
 const MONETA_SCHEMA_VERSION = 4;
 
 function moneta_meta_get(PDO $pdo, string $key, string $default = ''): string
@@ -129,6 +130,7 @@ function moneta_fetch_gl_accounts_for_date(string $company, string $asOfDate, in
 
     $rows = project_fetch_rows($company, MONETA_GL_ENTITY, [
         '$select' => MONETA_GL_SELECT,
+        // FlowFilter: Balance_at_Date = cumulatief t/m einddatum van de range.
         '$filter' => "Date_Filter eq '.." . $asOfDate . "'",
     ], $ttl);
 
@@ -158,6 +160,98 @@ function moneta_fetch_gl_accounts_for_date(string $company, string $asOfDate, in
     });
 
     return $accounts;
+}
+
+function moneta_gl_entries_exist_on_date(string $company, string $date, int $ttl = MONETA_NIGHTLY_ODATA_TTL): bool
+{
+    $date = moneta_parse_date($date);
+    if ($date === '') {
+        return false;
+    }
+
+    $rows = project_try_fetch_rows($company, MONETA_GL_ENTRIES_ENTITY, [
+        '$select' => 'Entry_No,Posting_Date',
+        '$filter' => 'Posting_Date eq ' . $date,
+        '$top' => '1',
+    ], $ttl);
+
+    return $rows !== [];
+}
+
+/**
+ * Eerste boekingsdatum in G_LEntries (gecached). Voor deze tenant ~eind jan 2026;
+ * eerdere Date_Filter-saldi zijn daardoor terecht 0.
+ */
+function moneta_earliest_gl_posting_date(string $company, int $ttl = MONETA_NIGHTLY_ODATA_TTL): string
+{
+    $pdo = moneta_pdo();
+    $key = 'earliest_gl_posting:' . $company;
+    $cached = moneta_parse_date(moneta_meta_get($pdo, $key, ''));
+    if ($cached !== '') {
+        return $cached;
+    }
+
+    $today = date('Y-m-d');
+    $low = new DateTimeImmutable('2020-01-01');
+    $high = new DateTimeImmutable($today);
+    $found = '';
+
+    // Eerst grof op maand, daarna op dag.
+    $monthCursor = $low;
+    while ($monthCursor <= $high) {
+        $monthEnd = $monthCursor->modify('last day of this month');
+        if ($monthEnd > $high) {
+            $monthEnd = $high;
+        }
+        $probe = $monthEnd->format('Y-m-d');
+        $rows = project_try_fetch_rows($company, MONETA_GL_ENTRIES_ENTITY, [
+            '$select' => 'Entry_No,Posting_Date',
+            '$filter' => 'Posting_Date ge ' . $monthCursor->format('Y-m-d')
+                . ' and Posting_Date le ' . $probe,
+            '$top' => '1',
+        ], $ttl);
+        if ($rows !== []) {
+            // Zoek eerste dag in deze maand.
+            $day = $monthCursor;
+            while ($day <= $monthEnd) {
+                $dayIso = $day->format('Y-m-d');
+                if (moneta_gl_entries_exist_on_date($company, $dayIso, $ttl)) {
+                    $found = $dayIso;
+                    break 2;
+                }
+                $day = $day->modify('+1 day');
+            }
+            // Entries in maand maar dagdetectie mislukt: gebruik maandstart als fallback.
+            $found = $monthCursor->format('Y-m-d');
+            break;
+        }
+        $monthCursor = $monthCursor->modify('first day of next month');
+    }
+
+    if ($found !== '') {
+        moneta_meta_set($pdo, $key, $found);
+    }
+
+    return $found;
+}
+
+/**
+ * True als er minstens één niet-nul Balance_at_Date is.
+ *
+ * @param list<array{balance?: float}> $accounts
+ */
+function moneta_gl_accounts_have_nonzero_balance(array $accounts): bool
+{
+    foreach ($accounts as $account) {
+        if (!is_array($account)) {
+            continue;
+        }
+        if (abs((float) ($account['balance'] ?? 0)) >= 0.01) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /**
@@ -299,7 +393,28 @@ function moneta_snapshot_gl_balances_for_company(
         $snapshotDate = date('Y-m-d');
     }
 
+    if ($isBackfill) {
+        $earliest = moneta_earliest_gl_posting_date($company, $ttl);
+        if ($earliest !== '' && $snapshotDate < $earliest) {
+            throw new InvalidArgumentException(
+                "Geen grootboekhistorie vóór {$earliest} (eerste G_LEntries-boeking). "
+                . "Date_Filter werkt, maar Balance_at_Date is dan terecht 0."
+            );
+        }
+    }
+
     $accounts = moneta_fetch_gl_accounts_for_date($company, $snapshotDate, $ttl);
+
+    if ($isBackfill && !moneta_gl_accounts_have_nonzero_balance($accounts)) {
+        $earliest = moneta_earliest_gl_posting_date($company, $ttl);
+        throw new InvalidArgumentException(
+            "Rekeningschema {$snapshotDate}: alle Balance_at_Date=0. "
+            . ($earliest !== ''
+                ? "Eerste boekingsdatum in BC is {$earliest}; kies een datum ≥ die dag."
+                : "Controleer of er G_LEntries bestaan voor deze periode.")
+        );
+    }
+
     $stored = moneta_store_gl_snapshot($company, $snapshotDate, $accounts);
     $groupsStored = moneta_cache_group_balances_for_date($company, $snapshotDate);
     moneta_touch_gl_backfill_ceiling($company, $snapshotDate, $isBackfill);
@@ -310,6 +425,7 @@ function moneta_snapshot_gl_balances_for_company(
         'accounts' => count($accounts),
         'stored' => $stored,
         'group_balances_stored' => $groupsStored,
+        'nonzero' => moneta_gl_accounts_have_nonzero_balance($accounts),
     ];
 }
 
