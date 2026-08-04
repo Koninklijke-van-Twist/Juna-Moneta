@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Nightly job: banksaldi + termijnfacturen + basislijnkosten van open projecten → SQLite.
+ * Nightly job: Rekeningschema + termijnfacturen + basislijnkosten → SQLite.
  * Wordt via GET/CLI aangeroepen door het bestaande nightly-script (geen UI).
  *
  * Voorbeeld: GET /Moneta/web/nightly.php
@@ -28,7 +28,7 @@ if ($snapshotDate === '' && PHP_SAPI === 'cli') {
 
 try {
     $run = moneta_run_nightly_jobs($snapshotDate, MONETA_NIGHTLY_ODATA_TTL);
-    $hasResults = ($run['bank'] ?? []) !== []
+    $hasResults = ($run['gl'] ?? []) !== []
         || ($run['installments'] ?? []) !== []
         || ($run['baseline_costs'] ?? []) !== [];
     $payload = [
@@ -37,7 +37,7 @@ try {
         'snapshot_date' => (string) ($run['snapshot_date'] ?? ''),
         'odata_ttl_seconds' => MONETA_NIGHTLY_ODATA_TTL,
         'total_duration_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
-        'bank' => $run['bank'] ?? [],
+        'gl' => $run['gl'] ?? [],
         'installments' => $run['installments'] ?? [],
         'baseline_costs' => $run['baseline_costs'] ?? [],
         'errors' => $run['errors'] ?? [],
@@ -46,23 +46,27 @@ try {
     if (PHP_SAPI === 'cli') {
         echo 'OK snapshot_date=' . $payload['snapshot_date']
             . ' odata_ttl=' . MONETA_NIGHTLY_ODATA_TTL . "s\n";
-        echo "Bank:\n";
-        foreach ($payload['bank'] as $row) {
+        echo "Rekeningschema:\n";
+        foreach ($payload['gl'] as $row) {
             echo sprintf(
-                "  %s: accounts=%d stored=%d\n",
+                "  %s: accounts=%d stored=%d group_balances=%d\n",
                 (string) ($row['company'] ?? ''),
                 (int) ($row['accounts'] ?? 0),
-                (int) ($row['stored'] ?? 0)
+                (int) ($row['stored'] ?? 0),
+                (int) ($row['group_balances_stored'] ?? 0)
             );
         }
         echo "Installments:\n";
         foreach ($payload['installments'] as $row) {
+            $weights = is_array($row['job_gl_weights'] ?? null) ? $row['job_gl_weights'] : [];
             echo sprintf(
-                "  %s: open_projects=%d installments=%d stored=%d\n",
+                "  %s: open_projects=%d installments=%d stored=%d job_gl_weights=%d (jobs_with_weights=%d)\n",
                 (string) ($row['company'] ?? ''),
                 (int) ($row['open_projects'] ?? 0),
                 (int) ($row['installments'] ?? 0),
-                (int) ($row['stored'] ?? 0)
+                (int) ($row['stored'] ?? 0),
+                (int) ($weights['stored'] ?? 0),
+                (int) ($weights['jobs_with_weights'] ?? 0)
             );
         }
         echo "Baseline costs:\n";
