@@ -67,7 +67,8 @@ if ($action !== '' && $isAjax) {
                 'storage' => 'SQLite gl_balance_snapshots (sparse: ongewijzigd t.o.v. vorige dag wordt overgeslagen)',
                 'notes' => [
                     'Date_Filter werkt: Balance_at_Date is cumulatief t/m de gekozen dag.',
-                    'Vóór earliest_gl_posting_date bestaan er geen G_LEntries → saldi zijn terecht 0.',
+                    'Vóór earliest_gl_posting_date bestaan er geen G_LEntries → die dagen worden geweigerd.',
+                    'Dagen ≥ earliest met toevallig alle nullen zijn toegestaan (geen fatale stop).',
                     'backfill_end_date = backfill_ceiling − 1 (ceiling = eerste nightly-dag).',
                     'run_day krijgt end_date mee zodat de range tijdens de run niet opschuift.',
                 ],
