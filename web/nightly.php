@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Nightly job: Rekeningschema + termijnfacturen + basislijnkosten → SQLite.
+ * Nightly job: Rekeningschema-saldi → SQLite (groepscache mee).
  * Wordt via GET/CLI aangeroepen door het bestaande nightly-script (geen UI).
  *
  * Voorbeeld: GET /Moneta/web/nightly.php
@@ -28,9 +28,7 @@ if ($snapshotDate === '' && PHP_SAPI === 'cli') {
 
 try {
     $run = moneta_run_nightly_jobs($snapshotDate, MONETA_NIGHTLY_ODATA_TTL);
-    $hasResults = ($run['gl'] ?? []) !== []
-        || ($run['installments'] ?? []) !== []
-        || ($run['baseline_costs'] ?? []) !== [];
+    $hasResults = ($run['gl'] ?? []) !== [];
     $payload = [
         'ok' => $hasResults || ($run['errors'] ?? []) === [],
         'generated_at' => gmdate('c'),
@@ -38,8 +36,6 @@ try {
         'odata_ttl_seconds' => MONETA_NIGHTLY_ODATA_TTL,
         'total_duration_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
         'gl' => $run['gl'] ?? [],
-        'installments' => $run['installments'] ?? [],
-        'baseline_costs' => $run['baseline_costs'] ?? [],
         'errors' => $run['errors'] ?? [],
     ];
 
@@ -54,29 +50,6 @@ try {
                 (int) ($row['accounts'] ?? 0),
                 (int) ($row['stored'] ?? 0),
                 (int) ($row['group_balances_stored'] ?? 0)
-            );
-        }
-        echo "Installments:\n";
-        foreach ($payload['installments'] as $row) {
-            $weights = is_array($row['job_gl_weights'] ?? null) ? $row['job_gl_weights'] : [];
-            echo sprintf(
-                "  %s: open_projects=%d installments=%d stored=%d job_gl_weights=%d (jobs_with_weights=%d)\n",
-                (string) ($row['company'] ?? ''),
-                (int) ($row['open_projects'] ?? 0),
-                (int) ($row['installments'] ?? 0),
-                (int) ($row['stored'] ?? 0),
-                (int) ($weights['stored'] ?? 0),
-                (int) ($weights['jobs_with_weights'] ?? 0)
-            );
-        }
-        echo "Baseline costs:\n";
-        foreach ($payload['baseline_costs'] as $row) {
-            echo sprintf(
-                "  %s: open_projects=%d cost_groups=%d stored=%d\n",
-                (string) ($row['company'] ?? ''),
-                (int) ($row['open_projects'] ?? 0),
-                (int) ($row['cost_groups'] ?? 0),
-                (int) ($row['stored'] ?? 0)
             );
         }
         foreach ($payload['errors'] as $error) {
