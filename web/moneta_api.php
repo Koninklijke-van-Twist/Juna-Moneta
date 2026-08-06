@@ -1,7 +1,7 @@
 <?php
 
 /**
- * JSON API voor grafiekgroepen (autosave) en Rekeningschema-picker.
+ * JSON API voor grafieken, groepen, combinatieseries en gebruikersprognose.
  */
 
 require_once __DIR__ . '/auth.php';
@@ -31,6 +31,20 @@ function moneta_api_error(string $message, int $status = 400): void
     moneta_api_json(['ok' => false, 'error' => $message], $status);
 }
 
+/**
+ * @return array<string, mixed>
+ */
+function moneta_api_json_body(): array
+{
+    $raw = file_get_contents('php://input');
+    $body = is_string($raw) ? json_decode($raw, true) : null;
+    if (!is_array($body)) {
+        moneta_api_error('JSON body verwacht.');
+    }
+
+    return $body;
+}
+
 $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
 $action = trim((string) ($_GET['action'] ?? $_POST['action'] ?? ''));
 $company = trim((string) ($_GET['company'] ?? $_POST['company'] ?? ''));
@@ -43,11 +57,56 @@ if ($company === '' || !in_array($company, $companies, true)) {
 auth_set_current_company_context($company);
 
 try {
-    if ($action === 'groups' && $method === 'GET') {
+    if ($action === 'charts' && $method === 'GET') {
         moneta_api_json([
             'ok' => true,
             'company' => $company,
-            'groups' => moneta_list_chart_groups($company),
+            'charts' => moneta_list_charts($company, true),
+            'group_options' => moneta_list_balance_group_options($company),
+        ]);
+    }
+
+    if ($action === 'save_chart' && $method === 'POST') {
+        $body = moneta_api_json_body();
+        $chartId = (int) ($body['id'] ?? 0);
+        if ($chartId > 0) {
+            $chart = moneta_update_chart($company, $chartId, $body);
+        } else {
+            $chart = moneta_create_chart($company, $body);
+        }
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'chart' => $chart,
+            'charts' => moneta_list_charts($company, true),
+            'saved_at' => gmdate('c'),
+        ]);
+    }
+
+    if ($action === 'delete_chart' && $method === 'POST') {
+        $body = moneta_api_json_body();
+        $chartId = (int) ($body['id'] ?? $_GET['id'] ?? 0);
+        if ($chartId <= 0) {
+            moneta_api_error('Grafiek-id is verplicht.');
+        }
+        moneta_delete_chart($company, $chartId);
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'charts' => moneta_list_charts($company, true),
+        ]);
+    }
+
+    if ($action === 'groups' && $method === 'GET') {
+        $chartId = (int) ($_GET['chart_id'] ?? 0);
+        if ($chartId <= 0) {
+            $chartId = moneta_ensure_default_balance_chart($company);
+        }
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'chart_id' => $chartId,
+            'groups' => moneta_list_chart_groups($company, $chartId),
         ]);
     }
 
@@ -60,20 +119,42 @@ try {
     }
 
     if ($action === 'save_groups' && $method === 'POST') {
-        $raw = file_get_contents('php://input');
-        $body = is_string($raw) ? json_decode($raw, true) : null;
-        if (!is_array($body)) {
-            moneta_api_error('JSON body verwacht.');
-        }
+        $body = moneta_api_json_body();
         $groups = $body['groups'] ?? null;
         if (!is_array($groups)) {
             moneta_api_error('Veld groups (array) is verplicht.');
         }
-        $saved = moneta_save_chart_groups($company, $groups);
+        $chartId = (int) ($body['chart_id'] ?? 0);
+        if ($chartId <= 0) {
+            $chartId = moneta_ensure_default_balance_chart($company);
+        }
+        $saved = moneta_save_chart_groups($company, $groups, $chartId);
         moneta_api_json([
             'ok' => true,
             'company' => $company,
+            'chart_id' => $chartId,
             'groups' => $saved,
+            'group_options' => moneta_list_balance_group_options($company),
+            'saved_at' => gmdate('c'),
+        ]);
+    }
+
+    if ($action === 'save_derived' && $method === 'POST') {
+        $body = moneta_api_json_body();
+        $chartId = (int) ($body['chart_id'] ?? 0);
+        $series = $body['series'] ?? null;
+        if ($chartId <= 0) {
+            moneta_api_error('chart_id is verplicht.');
+        }
+        if (!is_array($series)) {
+            moneta_api_error('Veld series (array) is verplicht.');
+        }
+        $saved = moneta_save_derived_series($company, $chartId, $series);
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'chart_id' => $chartId,
+            'derived_series' => $saved,
             'saved_at' => gmdate('c'),
         ]);
     }
@@ -87,14 +168,65 @@ try {
         if ($dateTo === '') {
             $dateTo = moneta_default_date_to();
         }
-        $chart = moneta_group_chart_data($company, $dateFrom, $dateTo);
+        $chartId = (int) ($_GET['chart_id'] ?? 0);
+        if ($chartId <= 0) {
+            $chartId = moneta_ensure_default_balance_chart($company);
+        }
+        $chart = moneta_chart_data_for_id($company, $chartId, $dateFrom, $dateTo);
         moneta_api_json([
             'ok' => true,
             'company' => $company,
+            'chart_id' => $chartId,
             'date_from' => $dateFrom,
             'date_to' => $dateTo,
             'chart' => $chart,
-            'groups' => moneta_list_chart_groups($company),
+            'groups' => moneta_list_chart_groups($company, $chartId),
+        ]);
+    }
+
+    if ($action === 'forecast_one_time' && $method === 'GET') {
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'items' => moneta_list_forecast_one_time($company),
+        ]);
+    }
+
+    if ($action === 'save_forecast_one_time' && $method === 'POST') {
+        $body = moneta_api_json_body();
+        $items = $body['items'] ?? null;
+        if (!is_array($items)) {
+            moneta_api_error('Veld items (array) is verplicht.');
+        }
+        $saved = moneta_save_forecast_one_time($company, $items);
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'items' => $saved,
+            'saved_at' => gmdate('c'),
+        ]);
+    }
+
+    if ($action === 'forecast_rules' && $method === 'GET') {
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'items' => moneta_list_forecast_rules($company),
+        ]);
+    }
+
+    if ($action === 'save_forecast_rules' && $method === 'POST') {
+        $body = moneta_api_json_body();
+        $items = $body['items'] ?? null;
+        if (!is_array($items)) {
+            moneta_api_error('Veld items (array) is verplicht.');
+        }
+        $saved = moneta_save_forecast_rules($company, $items);
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'items' => $saved,
+            'saved_at' => gmdate('c'),
         ]);
     }
 

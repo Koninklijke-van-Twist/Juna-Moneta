@@ -7,7 +7,9 @@
 const MONETA_GL_ENTITY = 'Rekeningschema';
 const MONETA_GL_SELECT = 'No,Name,Balance_at_Date,Account_Type';
 const MONETA_GL_ENTRIES_ENTITY = 'G_LEntries';
-const MONETA_SCHEMA_VERSION = 4;
+const MONETA_SCHEMA_VERSION = 5;
+const MONETA_CHART_TYPE_BALANCE = 'balance';
+const MONETA_CHART_TYPE_DERIVED = 'derived';
 
 function moneta_meta_get(PDO $pdo, string $key, string $default = ''): string
 {
@@ -116,6 +118,133 @@ function moneta_ensure_gl_schema(PDO $pdo): void
         'CREATE INDEX IF NOT EXISTS idx_group_balance_company_date
          ON chart_group_balance_snapshots (company, snapshot_date)'
     );
+
+    moneta_migrate_charts_schema_v5($pdo);
+}
+
+function moneta_migrate_charts_schema_v5(PDO $pdo): void
+{
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS charts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT NOT NULL,
+            name TEXT NOT NULL,
+            chart_type TEXT NOT NULL DEFAULT \'balance\',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )'
+    );
+    $pdo->exec(
+        'CREATE INDEX IF NOT EXISTS idx_charts_company
+         ON charts (company, sort_order, id)'
+    );
+
+    if (!moneta_table_has_column($pdo, 'chart_groups', 'chart_id')) {
+        $pdo->exec('ALTER TABLE chart_groups ADD COLUMN chart_id INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!moneta_table_has_column($pdo, 'chart_group_accounts', 'negate')) {
+        $pdo->exec('ALTER TABLE chart_group_accounts ADD COLUMN negate INTEGER NOT NULL DEFAULT 0');
+    }
+
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS derived_chart_series (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chart_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            left_group_id INTEGER NOT NULL,
+            operator TEXT NOT NULL,
+            right_group_id INTEGER NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (chart_id) REFERENCES charts(id) ON DELETE CASCADE
+        )'
+    );
+    $pdo->exec(
+        'CREATE INDEX IF NOT EXISTS idx_derived_chart_series_chart
+         ON derived_chart_series (chart_id, sort_order, id)'
+    );
+
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS forecast_one_time (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT NOT NULL,
+            account_no TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT \'\',
+            description TEXT NOT NULL DEFAULT \'\',
+            amount REAL NOT NULL,
+            event_date TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )'
+    );
+    $pdo->exec(
+        'CREATE INDEX IF NOT EXISTS idx_forecast_one_time_company_date
+         ON forecast_one_time (company, event_date)'
+    );
+
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS forecast_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company TEXT NOT NULL,
+            account_no TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT \'\',
+            description TEXT NOT NULL DEFAULT \'\',
+            amount REAL NOT NULL,
+            start_date TEXT NOT NULL,
+            repeat_n INTEGER NOT NULL DEFAULT 1,
+            repeat_unit TEXT NOT NULL DEFAULT \'month\',
+            end_date TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )'
+    );
+    $pdo->exec(
+        'CREATE INDEX IF NOT EXISTS idx_forecast_rules_company
+         ON forecast_rules (company, start_date)'
+    );
+
+    // Orphan groepen zonder chart → default balance-chart per company.
+    $orphanCompanies = $pdo->query(
+        'SELECT DISTINCT company FROM chart_groups WHERE chart_id = 0 OR chart_id IS NULL'
+    )->fetchAll(PDO::FETCH_COLUMN);
+    $now = gmdate('c');
+    foreach ($orphanCompanies as $company) {
+        $company = trim((string) $company);
+        if ($company === '') {
+            continue;
+        }
+        $existing = $pdo->prepare(
+            'SELECT id FROM charts WHERE company = :company AND chart_type = :type ORDER BY sort_order ASC, id ASC LIMIT 1'
+        );
+        $existing->execute([
+            ':company' => $company,
+            ':type' => MONETA_CHART_TYPE_BALANCE,
+        ]);
+        $chartId = (int) ($existing->fetch()['id'] ?? 0);
+        if ($chartId <= 0) {
+            $ins = $pdo->prepare(
+                'INSERT INTO charts (company, name, chart_type, sort_order, created_at, updated_at)
+                 VALUES (:company, :name, :type, 0, :created_at, :updated_at)'
+            );
+            $ins->execute([
+                ':company' => $company,
+                ':name' => 'Saldi',
+                ':type' => MONETA_CHART_TYPE_BALANCE,
+                ':created_at' => $now,
+                ':updated_at' => $now,
+            ]);
+            $chartId = (int) $pdo->lastInsertId();
+        }
+        $pdo->prepare(
+            'UPDATE chart_groups SET chart_id = :chart_id
+             WHERE company = :company AND (chart_id = 0 OR chart_id IS NULL)'
+        )->execute([
+            ':chart_id' => $chartId,
+            ':company' => $company,
+        ]);
+    }
 }
 
 /**
@@ -405,16 +534,7 @@ function moneta_snapshot_gl_balances_for_company(
 
     $accounts = moneta_fetch_gl_accounts_for_date($company, $snapshotDate, $ttl);
 
-    if ($isBackfill && !moneta_gl_accounts_have_nonzero_balance($accounts)) {
-        $earliest = moneta_earliest_gl_posting_date($company, $ttl);
-        throw new InvalidArgumentException(
-            "Rekeningschema {$snapshotDate}: alle Balance_at_Date=0. "
-            . ($earliest !== ''
-                ? "Eerste boekingsdatum in BC is {$earliest}; kies een datum ≥ die dag."
-                : "Controleer of er G_LEntries bestaan voor deze periode.")
-        );
-    }
-
+    // Dagen vóór earliest blijven geblokkeerd; all-zero ná earliest mag (niet fatale stop).
     $stored = moneta_store_gl_snapshot($company, $snapshotDate, $accounts);
     $groupsStored = moneta_cache_group_balances_for_date($company, $snapshotDate);
     moneta_touch_gl_backfill_ceiling($company, $snapshotDate, $isBackfill);
@@ -545,22 +665,48 @@ function moneta_list_gl_accounts(string $company): array
 }
 
 /**
- * @return list<array{id: int, name: string, sort_order: int, accounts: list<array{account_no: string, account_name: string}>}>
+ * @return list<array{
+ *   id: int,
+ *   chart_id: int,
+ *   name: string,
+ *   sort_order: int,
+ *   accounts: list<array{account_no: string, account_name: string, negate: bool}>
+ * }>
  */
-function moneta_list_chart_groups(string $company): array
+function moneta_list_chart_groups(string $company, ?int $chartId = null): array
 {
+    if ($chartId === null) {
+        moneta_ensure_default_balance_chart($company);
+    } elseif ($chartId > 0) {
+        moneta_ensure_default_balance_chart($company);
+    }
+
     $pdo = moneta_pdo();
-    $groupStatement = $pdo->prepare(
-        'SELECT id, name, sort_order
-         FROM chart_groups
-         WHERE company = :company
-         ORDER BY sort_order ASC, id ASC'
-    );
-    $groupStatement->execute([':company' => $company]);
+    if ($chartId !== null && $chartId > 0) {
+        $groupStatement = $pdo->prepare(
+            'SELECT id, chart_id, name, sort_order
+             FROM chart_groups
+             WHERE company = :company AND chart_id = :chart_id
+             ORDER BY sort_order ASC, id ASC'
+        );
+        $groupStatement->execute([
+            ':company' => $company,
+            ':chart_id' => $chartId,
+        ]);
+    } else {
+        $groupStatement = $pdo->prepare(
+            'SELECT id, chart_id, name, sort_order
+             FROM chart_groups
+             WHERE company = :company
+             ORDER BY sort_order ASC, id ASC'
+        );
+        $groupStatement->execute([':company' => $company]);
+    }
     $groups = $groupStatement->fetchAll();
 
     $accountStatement = $pdo->prepare(
-        'SELECT cga.account_no, COALESCE(ga.account_name, cga.account_no) AS account_name
+        'SELECT cga.account_no, COALESCE(ga.account_name, cga.account_no) AS account_name,
+                COALESCE(cga.negate, 0) AS negate
          FROM chart_group_accounts cga
          LEFT JOIN gl_accounts ga
            ON ga.company = :company
@@ -581,10 +727,12 @@ function moneta_list_chart_groups(string $company): array
             $accounts[] = [
                 'account_no' => (string) ($account['account_no'] ?? ''),
                 'account_name' => (string) ($account['account_name'] ?? ''),
+                'negate' => ((int) ($account['negate'] ?? 0)) === 1,
             ];
         }
         $result[] = [
             'id' => $groupId,
+            'chart_id' => (int) ($group['chart_id'] ?? 0),
             'name' => (string) ($group['name'] ?? ''),
             'sort_order' => (int) ($group['sort_order'] ?? 0),
             'accounts' => $accounts,
@@ -595,40 +743,57 @@ function moneta_list_chart_groups(string $company): array
 }
 
 /**
- * Vervangt alle groepen voor een bedrijf (autosave-payload).
+ * Vervangt groepen voor één balance-chart (autosave-payload).
  *
- * @param list<array{id?: int|null, name: string, accounts: list<string>}> $groups
- * @return list<array{id: int, name: string, sort_order: int, accounts: list<array{account_no: string, account_name: string}>}>
+ * @param list<array{
+ *   id?: int|null,
+ *   name: string,
+ *   accounts: list<string|array{account_no?: string, negate?: bool|int}>
+ * }> $groups
+ * @return list<array{id: int, chart_id: int, name: string, sort_order: int, accounts: list<array{account_no: string, account_name: string, negate: bool}>}>
  */
-function moneta_save_chart_groups(string $company, array $groups): array
+function moneta_save_chart_groups(string $company, array $groups, ?int $chartId = null): array
 {
-    $beforeSignature = moneta_groups_membership_signature(moneta_list_chart_groups($company));
+    if ($chartId === null || $chartId <= 0) {
+        $chartId = moneta_ensure_default_balance_chart($company);
+    }
+    $chart = moneta_get_chart($company, $chartId);
+    if ($chart === null || $chart['chart_type'] !== MONETA_CHART_TYPE_BALANCE) {
+        throw new InvalidArgumentException('Saldigrafiek niet gevonden.');
+    }
+
+    $beforeSignature = moneta_groups_membership_signature(moneta_list_chart_groups($company, null));
 
     $pdo = moneta_pdo();
     $now = gmdate('c');
     $pdo->beginTransaction();
     try {
         $existingIds = [];
-        $idStatement = $pdo->prepare('SELECT id FROM chart_groups WHERE company = :company');
-        $idStatement->execute([':company' => $company]);
+        $idStatement = $pdo->prepare(
+            'SELECT id FROM chart_groups WHERE company = :company AND chart_id = :chart_id'
+        );
+        $idStatement->execute([
+            ':company' => $company,
+            ':chart_id' => $chartId,
+        ]);
         foreach ($idStatement->fetchAll() as $row) {
             $existingIds[(int) $row['id']] = true;
         }
 
         $keepIds = [];
         $insertGroup = $pdo->prepare(
-            'INSERT INTO chart_groups (company, name, sort_order, created_at, updated_at)
-             VALUES (:company, :name, :sort_order, :created_at, :updated_at)'
+            'INSERT INTO chart_groups (company, chart_id, name, sort_order, created_at, updated_at)
+             VALUES (:company, :chart_id, :name, :sort_order, :created_at, :updated_at)'
         );
         $updateGroup = $pdo->prepare(
             'UPDATE chart_groups
-             SET name = :name, sort_order = :sort_order, updated_at = :updated_at
+             SET name = :name, sort_order = :sort_order, chart_id = :chart_id, updated_at = :updated_at
              WHERE id = :id AND company = :company'
         );
         $deleteAccounts = $pdo->prepare('DELETE FROM chart_group_accounts WHERE group_id = :group_id');
         $insertAccount = $pdo->prepare(
-            'INSERT OR IGNORE INTO chart_group_accounts (group_id, account_no)
-             VALUES (:group_id, :account_no)'
+            'INSERT OR IGNORE INTO chart_group_accounts (group_id, account_no, negate)
+             VALUES (:group_id, :account_no, :negate)'
         );
 
         $sortOrder = 0;
@@ -645,6 +810,7 @@ function moneta_save_chart_groups(string $company, array $groups): array
                 $updateGroup->execute([
                     ':name' => $name,
                     ':sort_order' => $sortOrder,
+                    ':chart_id' => $chartId,
                     ':updated_at' => $now,
                     ':id' => $groupId,
                     ':company' => $company,
@@ -652,6 +818,7 @@ function moneta_save_chart_groups(string $company, array $groups): array
             } else {
                 $insertGroup->execute([
                     ':company' => $company,
+                    ':chart_id' => $chartId,
                     ':name' => $name,
                     ':sort_order' => $sortOrder,
                     ':created_at' => $now,
@@ -668,7 +835,9 @@ function moneta_save_chart_groups(string $company, array $groups): array
             }
             $seen = [];
             foreach ($accountNos as $accountNo) {
+                $negate = 0;
                 if (is_array($accountNo)) {
+                    $negate = !empty($accountNo['negate']) ? 1 : 0;
                     $accountNo = (string) ($accountNo['account_no'] ?? '');
                 }
                 $accountNo = trim((string) $accountNo);
@@ -679,6 +848,7 @@ function moneta_save_chart_groups(string $company, array $groups): array
                 $insertAccount->execute([
                     ':group_id' => $groupId,
                     ':account_no' => $accountNo,
+                    ':negate' => $negate,
                 ]);
             }
             $sortOrder++;
@@ -688,6 +858,12 @@ function moneta_save_chart_groups(string $company, array $groups): array
             if (!isset($keepIds[$existingId])) {
                 $pdo->prepare('DELETE FROM chart_group_accounts WHERE group_id = :id')
                     ->execute([':id' => $existingId]);
+                $pdo->prepare('DELETE FROM chart_group_balance_snapshots WHERE group_id = :id')
+                    ->execute([':id' => $existingId]);
+                $pdo->prepare(
+                    'DELETE FROM derived_chart_series
+                     WHERE left_group_id = :id OR right_group_id = :id'
+                )->execute([':id' => $existingId]);
                 $pdo->prepare('DELETE FROM chart_groups WHERE id = :id AND company = :company')
                     ->execute([':id' => $existingId, ':company' => $company]);
             }
@@ -699,8 +875,8 @@ function moneta_save_chart_groups(string $company, array $groups): array
         throw $error;
     }
 
-    $saved = moneta_list_chart_groups($company);
-    $afterSignature = moneta_groups_membership_signature($saved);
+    $saved = moneta_list_chart_groups($company, $chartId);
+    $afterSignature = moneta_groups_membership_signature(moneta_list_chart_groups($company, null));
     if ($beforeSignature !== $afterSignature) {
         moneta_rebuild_group_balance_cache($company);
     }
@@ -709,7 +885,7 @@ function moneta_save_chart_groups(string $company, array $groups): array
 }
 
 /**
- * @param list<array{id?: int, accounts?: list<array{account_no?: string}|string>}> $groups
+ * @param list<array{id?: int, accounts?: list<array{account_no?: string, negate?: bool|int}|string>}> $groups
  */
 function moneta_groups_membership_signature(array $groups): string
 {
@@ -723,11 +899,13 @@ function moneta_groups_membership_signature(array $groups): string
         foreach ($group['accounts'] ?? [] as $account) {
             if (is_array($account)) {
                 $accountNo = trim((string) ($account['account_no'] ?? ''));
+                $negate = !empty($account['negate']) ? '1' : '0';
             } else {
                 $accountNo = trim((string) $account);
+                $negate = '0';
             }
             if ($accountNo !== '') {
-                $accounts[] = $accountNo;
+                $accounts[] = $accountNo . ':' . $negate;
             }
         }
         $accounts = array_values(array_unique($accounts));
@@ -786,7 +964,8 @@ function moneta_cache_group_balances_for_date(string $company, string $snapshotD
             if ($accountNo === '' || !isset($balances[$accountNo])) {
                 continue;
             }
-            $sum += (float) $balances[$accountNo]['balance'];
+            $sign = !empty($account['negate']) ? -1.0 : 1.0;
+            $sum += (float) $balances[$accountNo]['balance'] * $sign;
             $known = true;
         }
         if (!$known) {
@@ -862,7 +1041,8 @@ function moneta_rebuild_group_balance_cache(string $company): array
             if ($accountNo === '') {
                 continue;
             }
-            $accountNos[] = $accountNo;
+            $sign = !empty($account['negate']) ? -1.0 : 1.0;
+            $accountNos[$accountNo] = $sign;
             $neededAccounts[$accountNo] = true;
         }
         if ($accountNos !== []) {
@@ -914,14 +1094,14 @@ function moneta_rebuild_group_balance_cache(string $company): array
             foreach ($byDate[$date] as $accountNo => $balance) {
                 $running[$accountNo] = $balance;
             }
-            foreach ($groupAccounts as $groupId => $accountNos) {
+            foreach ($groupAccounts as $groupId => $accountSigns) {
                 $sum = 0.0;
                 $known = false;
-                foreach ($accountNos as $accountNo) {
+                foreach ($accountSigns as $accountNo => $sign) {
                     if (!array_key_exists($accountNo, $running)) {
                         continue;
                     }
-                    $sum += (float) $running[$accountNo];
+                    $sum += (float) $running[$accountNo] * (float) $sign;
                     $known = true;
                 }
                 if (!$known) {
@@ -1001,116 +1181,21 @@ function moneta_group_balances_as_of(string $company, string $asOfDate, bool $st
 }
 
 /**
- * Grafiek op gecachte groepstotalen (carry-forward over kalenderdagen).
+ * Compat: eerste balance-chart over periode (incl. gebruikersprognose).
  *
- * @return array{labels: string[], series: list<array{account_no: string, name: string, data: list<float|null>}>}
+ * @return array{labels: string[], series: list<array{account_no: string, name: string, data: list<float|null>}>, today?: string}
  */
-function moneta_group_chart_data(string $company, string $dateFrom, string $dateTo): array
+function moneta_group_chart_data(string $company, string $dateFrom, string $dateTo, ?int $chartId = null): array
 {
-    $dateFrom = moneta_parse_date($dateFrom);
-    $dateTo = moneta_parse_date($dateTo);
-    if ($dateFrom === '' || $dateTo === '') {
-        return ['labels' => [], 'series' => []];
+    if ($chartId === null || $chartId <= 0) {
+        $chartId = moneta_ensure_default_balance_chart($company);
     }
-    if ($dateFrom > $dateTo) {
-        $tmp = $dateFrom;
-        $dateFrom = $dateTo;
-        $dateTo = $tmp;
-    }
-
-    $groups = moneta_list_chart_groups($company);
-    if ($groups === []) {
-        return ['labels' => [], 'series' => []];
-    }
-
-    $groupMeta = [];
-    foreach ($groups as $group) {
-        $groupId = (int) ($group['id'] ?? 0);
-        if ($groupId <= 0 || ($group['accounts'] ?? []) === []) {
-            continue;
-        }
-        $groupMeta[$groupId] = (string) ($group['name'] ?? '');
-    }
-    if ($groupMeta === []) {
-        return ['labels' => [], 'series' => []];
-    }
-
-    $pdo = moneta_pdo();
-    $membership = moneta_groups_membership_signature($groups);
-    if (moneta_meta_get($pdo, 'group_balance_cache_v:' . $company) !== $membership) {
-        moneta_rebuild_group_balance_cache($company);
-    }
-
-    $statement = $pdo->prepare(
-        'SELECT group_id, balance, snapshot_date
-         FROM chart_group_balance_snapshots
-         WHERE company = :company
-           AND snapshot_date <= :date_to
-         ORDER BY snapshot_date ASC'
-    );
-    $statement->execute([
-        ':company' => $company,
-        ':date_to' => $dateTo,
-    ]);
-
-    $pointsByGroup = [];
-    foreach ($statement->fetchAll() as $row) {
-        $groupId = (int) ($row['group_id'] ?? 0);
-        $date = moneta_parse_date((string) ($row['snapshot_date'] ?? ''));
-        if ($groupId <= 0 || $date === '' || !isset($groupMeta[$groupId])) {
-            continue;
-        }
-        $pointsByGroup[$groupId][$date] = (float) ($row['balance'] ?? 0);
-    }
-
-    if ($pointsByGroup === []) {
-        return ['labels' => [], 'series' => []];
-    }
-
-    $labels = [];
-    $cursor = new DateTimeImmutable($dateFrom);
-    $end = new DateTimeImmutable($dateTo);
-    while ($cursor <= $end) {
-        $labels[] = $cursor->format('Y-m-d');
-        $cursor = $cursor->modify('+1 day');
-    }
-
-    $series = [];
-    foreach ($groupMeta as $groupId => $name) {
-        $points = $pointsByGroup[$groupId] ?? [];
-        if ($points === []) {
-            continue;
-        }
-        $pointDates = array_keys($points);
-        sort($pointDates);
-        $pointIndex = 0;
-        $pointCount = count($pointDates);
-        $lastKnown = null;
-        $data = [];
-        $hasValue = false;
-        foreach ($labels as $label) {
-            while ($pointIndex < $pointCount && $pointDates[$pointIndex] <= $label) {
-                $lastKnown = (float) $points[$pointDates[$pointIndex]];
-                $pointIndex++;
-            }
-            $data[] = $lastKnown;
-            if ($lastKnown !== null) {
-                $hasValue = true;
-            }
-        }
-        if (!$hasValue) {
-            continue;
-        }
-        $series[] = [
-            'account_no' => 'group:' . $groupId,
-            'name' => $name,
-            'data' => $data,
-        ];
-    }
+    $data = moneta_chart_data_for_id($company, $chartId, $dateFrom, $dateTo);
 
     return [
-        'labels' => $labels,
-        'series' => $series,
+        'labels' => $data['labels'] ?? [],
+        'series' => $data['series'] ?? [],
+        'today' => $data['today'] ?? date('Y-m-d'),
     ];
 }
 

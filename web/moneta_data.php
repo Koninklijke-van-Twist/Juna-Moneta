@@ -25,6 +25,8 @@ const MONETA_UNASSIGNED_ACCOUNT_NO = '__unassigned__';
 const MONETA_NIGHTLY_ODATA_TTL = 18000;
 
 require_once __DIR__ . '/moneta_gl.php';
+require_once __DIR__ . '/moneta_forecast_user.php';
+require_once __DIR__ . '/moneta_charts.php';
 
 /**
  * Functies
@@ -235,7 +237,7 @@ function moneta_default_date_from(): string
 
 function moneta_default_date_to(): string
 {
-    return date('Y-m-d');
+    return date('Y-m-d', strtotime('+1 year'));
 }
 
 function moneta_default_forecast_from(): string
