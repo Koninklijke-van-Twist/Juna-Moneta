@@ -86,7 +86,7 @@ if ($action !== '' && $isAjax) {
                 'notes' => [
                     'Richting: vanaf backfill_from_date (oudste in cache) achteruit (−1 dag) tot until_date.',
                     'Date_Filter werkt: Balance_at_Date is cumulatief t/m de gekozen dag.',
-                    'Vóór earliest_gl_posting_date bestaan er geen G_LEntries → die dagen worden geweigerd.',
+                    'until_date vóór earliest_gl_posting_date: rode log + harde blokkade (UI en API).',
                     'Dagen ≥ earliest met toevallig alle nullen zijn toegestaan (geen fatale stop).',
                     'from_date wordt bij start van de run vastgezet zodat nieuwe MIN(snapshot) de loop niet verandert.',
                 ],
@@ -117,6 +117,17 @@ if ($action !== '' && $isAjax) {
             if ($untilDate > $fromDate) {
                 throw new InvalidArgumentException(
                     "until_date ({$untilDate}) ligt na from_date ({$fromDate}). Kies een oudere tot-datum."
+                );
+            }
+            $earliestForRun = moneta_earliest_gl_posting_date($company, MONETA_GL_ODATA_TTL);
+            if ($earliestForRun !== '' && $untilDate < $earliestForRun) {
+                throw new InvalidArgumentException(
+                    "until_date ({$untilDate}) ligt vóór earliest_gl_posting_date ({$earliestForRun}). Kies een latere tot-datum."
+                );
+            }
+            if ($earliestForRun !== '' && $day < $earliestForRun) {
+                throw new InvalidArgumentException(
+                    "Datum {$day} ligt vóór earliest_gl_posting_date ({$earliestForRun})."
                 );
             }
             if ($day > $fromDate || $day < $untilDate) {
@@ -362,7 +373,7 @@ if ($fromDate !== '' && $defaultUntil > $fromDate) {
             fromEl.value = data.backfill_from_date || '';
         }
         if (!options.keepUntilDate) {
-            // until_date niet forceren naar earliest — alleen waarschuwen in de log.
+            // until_date niet forceren naar earliest — rode log + harde blokkade bij Start.
             const from = data.backfill_from_date || fromEl.value;
             let until = untilEl.value;
             if (from && until && until > from) {
@@ -373,9 +384,9 @@ if ($fromDate !== '' && $defaultUntil > $fromDate) {
         const earliest = data.earliest_gl_posting_date || '';
         if (earliest && untilEl.value && untilEl.value < earliest) {
             log(
-                'WAARSCHUWING: until_date (' + untilEl.value
+                'BLOKKADE: until_date (' + untilEl.value
                 + ') ligt vóór earliest_gl_posting_date (' + earliest
-                + '). Dagen vóór die datum worden door BC/backfill geweigerd of zijn terecht 0.',
+                + '). Kies een latere tot-datum; Start is geblokkeerd.',
                 'log-err'
             );
         }
@@ -420,20 +431,23 @@ if ($fromDate !== '' && $defaultUntil > $fromDate) {
             fromEl.value = from;
             let until = untilEl.value;
             const earliest = status.earliest_gl_posting_date || '';
-            if (earliest && until && until < earliest) {
-                log(
-                    'WAARSCHUWING: until_date (' + until
-                    + ') < earliest_gl_posting_date (' + earliest
-                    + '). De run gaat door; dagen vóór ' + earliest
-                    + ' falen of leveren nullen op.',
-                    'log-err'
-                );
-            }
             if (!from || !until) {
                 throw new Error('from_date en until_date zijn verplicht.');
             }
             if (until > from) {
                 throw new Error('until_date (' + until + ') > from_date (' + from + '). Kies een oudere tot-datum.');
+            }
+            if (earliest && until < earliest) {
+                log(
+                    'BLOKKADE: until_date (' + until
+                    + ') < earliest_gl_posting_date (' + earliest
+                    + '). Backfill gestopt.',
+                    'log-err'
+                );
+                throw new Error(
+                    'until_date (' + until + ') ligt vóór earliest_gl_posting_date (' + earliest
+                    + '). Kies een latere tot-datum.'
+                );
             }
 
             let cursor = from;
