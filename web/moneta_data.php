@@ -6,12 +6,12 @@
 
 require_once __DIR__ . '/project_data.php';
 
-/** OData-cache tijdens nightly: 5 uur, zodat hertesten snel via cache gaat. */
-const MONETA_NIGHTLY_ODATA_TTL = 18000;
-
 require_once __DIR__ . '/moneta_gl.php';
 require_once __DIR__ . '/moneta_forecast_user.php';
 require_once __DIR__ . '/moneta_charts.php';
+
+/** @deprecated Gebruik MONETA_GL_ODATA_TTL / AUTH_COMPANIES_ODATA_TTL. */
+const MONETA_NIGHTLY_ODATA_TTL = MONETA_GL_ODATA_TTL;
 
 function moneta_data_dir(): string
 {
@@ -120,15 +120,15 @@ function moneta_default_date_to(): string
  *   errors: list<array{company: string, step: string, error: string}>
  * }
  */
-function moneta_run_nightly_jobs(string $snapshotDate = '', int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
+function moneta_run_nightly_jobs(string $snapshotDate = '', int $ttl = MONETA_GL_ODATA_TTL): array
 {
     $snapshotDate = moneta_parse_date($snapshotDate);
     if ($snapshotDate === '') {
         $snapshotDate = date('Y-m-d');
     }
-    $ttl = max(MONETA_NIGHTLY_ODATA_TTL, (int) $ttl);
+    $ttl = $ttl > 0 ? (int) $ttl : MONETA_GL_ODATA_TTL;
 
-    $companies = project_companies_for_page($ttl);
+    $companies = project_companies_for_page(AUTH_COMPANIES_ODATA_TTL);
     $glResults = [];
     $errors = [];
 

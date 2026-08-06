@@ -7,6 +7,8 @@
 const MONETA_GL_ENTITY = 'Rekeningschema';
 const MONETA_GL_SELECT = 'No,Name,Balance_at_Date,Account_Type';
 const MONETA_GL_ENTRIES_ENTITY = 'G_LEntries';
+/** Rekeningschema/OData: per snapshot-datum unieke URL; week is veilig genoeg. */
+const MONETA_GL_ODATA_TTL = 604800; // 7 dagen
 const MONETA_SCHEMA_VERSION = 5;
 const MONETA_CHART_TYPE_BALANCE = 'balance';
 const MONETA_CHART_TYPE_DERIVED = 'derived';
@@ -250,7 +252,7 @@ function moneta_migrate_charts_schema_v5(PDO $pdo): void
 /**
  * @return list<array{account_no: string, account_name: string, account_type: string, balance: float}>
  */
-function moneta_fetch_gl_accounts_for_date(string $company, string $asOfDate, int $ttl = MONETA_NIGHTLY_ODATA_TTL): array
+function moneta_fetch_gl_accounts_for_date(string $company, string $asOfDate, int $ttl = MONETA_GL_ODATA_TTL): array
 {
     $asOfDate = moneta_parse_date($asOfDate);
     if ($asOfDate === '') {
@@ -291,7 +293,7 @@ function moneta_fetch_gl_accounts_for_date(string $company, string $asOfDate, in
     return $accounts;
 }
 
-function moneta_gl_entries_exist_on_date(string $company, string $date, int $ttl = MONETA_NIGHTLY_ODATA_TTL): bool
+function moneta_gl_entries_exist_on_date(string $company, string $date, int $ttl = MONETA_GL_ODATA_TTL): bool
 {
     $date = moneta_parse_date($date);
     if ($date === '') {
@@ -311,7 +313,7 @@ function moneta_gl_entries_exist_on_date(string $company, string $date, int $ttl
  * Eerste boekingsdatum in G_LEntries (gecached). Voor deze tenant ~eind jan 2026;
  * eerdere Date_Filter-saldi zijn daardoor terecht 0.
  */
-function moneta_earliest_gl_posting_date(string $company, int $ttl = MONETA_NIGHTLY_ODATA_TTL): string
+function moneta_earliest_gl_posting_date(string $company, int $ttl = MONETA_GL_ODATA_TTL): string
 {
     $pdo = moneta_pdo();
     $key = 'earliest_gl_posting:' . $company;
@@ -514,7 +516,7 @@ function moneta_store_gl_snapshot(string $company, string $snapshotDate, array $
 function moneta_snapshot_gl_balances_for_company(
     string $company,
     string $snapshotDate = '',
-    int $ttl = MONETA_NIGHTLY_ODATA_TTL,
+    int $ttl = MONETA_GL_ODATA_TTL,
     bool $isBackfill = false
 ): array {
     $snapshotDate = moneta_parse_date($snapshotDate);

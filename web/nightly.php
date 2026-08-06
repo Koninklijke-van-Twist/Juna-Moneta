@@ -27,13 +27,14 @@ if ($snapshotDate === '' && PHP_SAPI === 'cli') {
 }
 
 try {
-    $run = moneta_run_nightly_jobs($snapshotDate, MONETA_NIGHTLY_ODATA_TTL);
+    $run = moneta_run_nightly_jobs($snapshotDate, MONETA_GL_ODATA_TTL);
     $hasResults = ($run['gl'] ?? []) !== [];
     $payload = [
         'ok' => $hasResults || ($run['errors'] ?? []) === [],
         'generated_at' => gmdate('c'),
         'snapshot_date' => (string) ($run['snapshot_date'] ?? ''),
-        'odata_ttl_seconds' => MONETA_NIGHTLY_ODATA_TTL,
+        'odata_ttl_seconds' => MONETA_GL_ODATA_TTL,
+        'companies_odata_ttl_seconds' => AUTH_COMPANIES_ODATA_TTL,
         'total_duration_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
         'gl' => $run['gl'] ?? [],
         'errors' => $run['errors'] ?? [],
@@ -41,7 +42,8 @@ try {
 
     if (PHP_SAPI === 'cli') {
         echo 'OK snapshot_date=' . $payload['snapshot_date']
-            . ' odata_ttl=' . MONETA_NIGHTLY_ODATA_TTL . "s\n";
+            . ' gl_odata_ttl=' . MONETA_GL_ODATA_TTL . 's'
+            . ' companies_ttl=' . AUTH_COMPANIES_ODATA_TTL . "s\n";
         echo "Rekeningschema:\n";
         foreach ($payload['gl'] as $row) {
             echo sprintf(

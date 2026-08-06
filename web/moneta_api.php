@@ -184,12 +184,46 @@ try {
         ]);
     }
 
+    if ($action === 'forecast' && $method === 'GET') {
+        $purged = moneta_purge_expired_forecasts($company);
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'one_time' => moneta_list_forecast_one_time($company),
+            'rules' => moneta_list_forecast_rules($company),
+            'purged' => $purged,
+        ]);
+    }
+
     if ($action === 'forecast_one_time' && $method === 'GET') {
+        moneta_purge_expired_forecasts($company);
         moneta_api_json([
             'ok' => true,
             'company' => $company,
             'items' => moneta_list_forecast_one_time($company),
         ]);
+    }
+
+    if ($action === 'upsert_forecast_one_time' && $method === 'POST') {
+        $body = moneta_api_json_body();
+        $item = $body['item'] ?? $body;
+        if (!is_array($item)) {
+            moneta_api_error('Veld item is verplicht.');
+        }
+        $saved = moneta_upsert_forecast_one_time($company, $item);
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'item' => $saved,
+            'saved_at' => gmdate('c'),
+        ]);
+    }
+
+    if ($action === 'delete_forecast_one_time' && $method === 'POST') {
+        $body = moneta_api_json_body();
+        $id = (int) ($body['id'] ?? 0);
+        moneta_delete_forecast_one_time($company, $id);
+        moneta_api_json(['ok' => true, 'company' => $company, 'id' => $id]);
     }
 
     if ($action === 'save_forecast_one_time' && $method === 'POST') {
@@ -208,11 +242,34 @@ try {
     }
 
     if ($action === 'forecast_rules' && $method === 'GET') {
+        moneta_purge_expired_forecasts($company);
         moneta_api_json([
             'ok' => true,
             'company' => $company,
             'items' => moneta_list_forecast_rules($company),
         ]);
+    }
+
+    if ($action === 'upsert_forecast_rule' && $method === 'POST') {
+        $body = moneta_api_json_body();
+        $item = $body['item'] ?? $body;
+        if (!is_array($item)) {
+            moneta_api_error('Veld item is verplicht.');
+        }
+        $saved = moneta_upsert_forecast_rule($company, $item);
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'item' => $saved,
+            'saved_at' => gmdate('c'),
+        ]);
+    }
+
+    if ($action === 'delete_forecast_rule' && $method === 'POST') {
+        $body = moneta_api_json_body();
+        $id = (int) ($body['id'] ?? 0);
+        moneta_delete_forecast_rule($company, $id);
+        moneta_api_json(['ok' => true, 'company' => $company, 'id' => $id]);
     }
 
     if ($action === 'save_forecast_rules' && $method === 'POST') {

@@ -308,12 +308,217 @@ function moneta_normalize_forecast_unit(string $unit): string
 }
 
 /**
+ * Verwijder eenmalige regels vóór vandaag en herhalende regels met verstreken einddatum.
+ *
+ * @return array{one_time: int, rules: int}
+ */
+function moneta_purge_expired_forecasts(string $company, string $asOfDate = ''): array
+{
+    $asOfDate = moneta_parse_date($asOfDate);
+    if ($asOfDate === '') {
+        $asOfDate = date('Y-m-d');
+    }
+
+    $pdo = moneta_pdo();
+    $one = $pdo->prepare(
+        'DELETE FROM forecast_one_time
+         WHERE company = :company AND event_date < :as_of'
+    );
+    $one->execute([
+        ':company' => $company,
+        ':as_of' => $asOfDate,
+    ]);
+
+    $rules = $pdo->prepare(
+        'DELETE FROM forecast_rules
+         WHERE company = :company
+           AND end_date IS NOT NULL
+           AND TRIM(end_date) <> \'\'
+           AND end_date < :as_of'
+    );
+    $rules->execute([
+        ':company' => $company,
+        ':as_of' => $asOfDate,
+    ]);
+
+    return [
+        'one_time' => $one->rowCount(),
+        'rules' => $rules->rowCount(),
+    ];
+}
+
+/**
+ * @param array{
+ *   id?: int|null,
+ *   account_no: string,
+ *   name?: string,
+ *   description?: string,
+ *   amount?: float|int|string,
+ *   event_date: string
+ * } $item
+ * @return array{id: int, account_no: string, account_name: string, name: string, description: string, amount: float, event_date: string}
+ */
+function moneta_upsert_forecast_one_time(string $company, array $item): array
+{
+    $accountNo = trim((string) ($item['account_no'] ?? ''));
+    $eventDate = moneta_parse_date((string) ($item['event_date'] ?? ''));
+    if ($accountNo === '' || $eventDate === '') {
+        throw new InvalidArgumentException('Rekening en datum zijn verplicht.');
+    }
+
+    $pdo = moneta_pdo();
+    $now = gmdate('c');
+    $id = isset($item['id']) ? (int) $item['id'] : 0;
+    $name = trim((string) ($item['name'] ?? ''));
+    $description = trim((string) ($item['description'] ?? ''));
+    $amount = (float) ($item['amount'] ?? 0);
+
+    if ($id > 0) {
+        $pdo->prepare(
+            'UPDATE forecast_one_time
+             SET account_no = :account_no, name = :name, description = :description,
+                 amount = :amount, event_date = :event_date, updated_at = :updated_at
+             WHERE id = :id AND company = :company'
+        )->execute([
+            ':account_no' => $accountNo,
+            ':name' => $name,
+            ':description' => $description,
+            ':amount' => $amount,
+            ':event_date' => $eventDate,
+            ':updated_at' => $now,
+            ':id' => $id,
+            ':company' => $company,
+        ]);
+    } else {
+        $pdo->prepare(
+            'INSERT INTO forecast_one_time
+                (company, account_no, name, description, amount, event_date, created_at, updated_at)
+             VALUES
+                (:company, :account_no, :name, :description, :amount, :event_date, :created_at, :updated_at)'
+        )->execute([
+            ':company' => $company,
+            ':account_no' => $accountNo,
+            ':name' => $name,
+            ':description' => $description,
+            ':amount' => $amount,
+            ':event_date' => $eventDate,
+            ':created_at' => $now,
+            ':updated_at' => $now,
+        ]);
+        $id = (int) $pdo->lastInsertId();
+    }
+
+    foreach (moneta_list_forecast_one_time($company) as $row) {
+        if ((int) $row['id'] === $id) {
+            return $row;
+        }
+    }
+
+    throw new RuntimeException('Prognoseregel kon niet worden opgeslagen.');
+}
+
+function moneta_delete_forecast_one_time(string $company, int $id): void
+{
+    if ($id <= 0) {
+        throw new InvalidArgumentException('Ongeldig id.');
+    }
+    moneta_pdo()->prepare(
+        'DELETE FROM forecast_one_time WHERE id = :id AND company = :company'
+    )->execute([':id' => $id, ':company' => $company]);
+}
+
+/**
+ * @param array{
+ *   id?: int|null,
+ *   account_no: string,
+ *   name?: string,
+ *   description?: string,
+ *   amount?: float|int|string,
+ *   start_date: string,
+ *   repeat_n?: int|string,
+ *   repeat_unit?: string,
+ *   end_date?: string|null
+ * } $item
+ * @return array{id: int, account_no: string, account_name: string, name: string, description: string, amount: float, start_date: string, repeat_n: int, repeat_unit: string, end_date: string|null}
+ */
+function moneta_upsert_forecast_rule(string $company, array $item): array
+{
+    $accountNo = trim((string) ($item['account_no'] ?? ''));
+    $startDate = moneta_parse_date((string) ($item['start_date'] ?? ''));
+    if ($accountNo === '' || $startDate === '') {
+        throw new InvalidArgumentException('Rekening en startdatum zijn verplicht.');
+    }
+    $endRaw = $item['end_date'] ?? null;
+    $endDate = is_string($endRaw) ? moneta_parse_date($endRaw) : '';
+    if ($endDate !== '' && $endDate < $startDate) {
+        throw new InvalidArgumentException('Einddatum moet op of na de startdatum liggen.');
+    }
+
+    $pdo = moneta_pdo();
+    $now = gmdate('c');
+    $id = isset($item['id']) ? (int) $item['id'] : 0;
+    $params = [
+        ':account_no' => $accountNo,
+        ':name' => trim((string) ($item['name'] ?? '')),
+        ':description' => trim((string) ($item['description'] ?? '')),
+        ':amount' => (float) ($item['amount'] ?? 0),
+        ':start_date' => $startDate,
+        ':repeat_n' => max(1, (int) ($item['repeat_n'] ?? 1)),
+        ':repeat_unit' => moneta_normalize_forecast_unit((string) ($item['repeat_unit'] ?? 'month')),
+        ':end_date' => $endDate !== '' ? $endDate : null,
+        ':updated_at' => $now,
+    ];
+
+    if ($id > 0) {
+        $pdo->prepare(
+            'UPDATE forecast_rules
+             SET account_no = :account_no, name = :name, description = :description, amount = :amount,
+                 start_date = :start_date, repeat_n = :repeat_n, repeat_unit = :repeat_unit,
+                 end_date = :end_date, updated_at = :updated_at
+             WHERE id = :id AND company = :company'
+        )->execute($params + [':id' => $id, ':company' => $company]);
+    } else {
+        $pdo->prepare(
+            'INSERT INTO forecast_rules
+                (company, account_no, name, description, amount, start_date, repeat_n, repeat_unit, end_date, created_at, updated_at)
+             VALUES
+                (:company, :account_no, :name, :description, :amount, :start_date, :repeat_n, :repeat_unit, :end_date, :created_at, :updated_at)'
+        )->execute($params + [':company' => $company, ':created_at' => $now]);
+        $id = (int) $pdo->lastInsertId();
+    }
+
+    foreach (moneta_list_forecast_rules($company) as $row) {
+        if ((int) $row['id'] === $id) {
+            return $row;
+        }
+    }
+
+    throw new RuntimeException('Prognoseregel kon niet worden opgeslagen.');
+}
+
+function moneta_delete_forecast_rule(string $company, int $id): void
+{
+    if ($id <= 0) {
+        throw new InvalidArgumentException('Ongeldig id.');
+    }
+    moneta_pdo()->prepare(
+        'DELETE FROM forecast_rules WHERE id = :id AND company = :company'
+    )->execute([':id' => $id, ':company' => $company]);
+}
+
+/**
  * Som van prognosebedragen per rekening per dag in [dateFrom, dateTo].
  *
  * @return array<string, array<string, float>> account_no => [Y-m-d => amount]
  */
 function moneta_forecast_account_deltas(string $company, string $dateFrom, string $dateTo): array
 {
+    static $purgedCompanies = [];
+    if (!isset($purgedCompanies[$company])) {
+        moneta_purge_expired_forecasts($company);
+        $purgedCompanies[$company] = true;
+    }
+
     $dateFrom = moneta_parse_date($dateFrom);
     $dateTo = moneta_parse_date($dateTo);
     if ($dateFrom === '' || $dateTo === '' || $dateFrom > $dateTo) {

@@ -203,12 +203,39 @@ $today = date('Y-m-d');
             background: var(--kvt-main-blue); color: #fff; border-color: var(--kvt-main-blue);
         }
         .moneta-charts-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+        .moneta-forecast-filters {
+            display: grid; gap: 8px; margin-bottom: 12px;
+        }
+        .moneta-forecast-list {
+            max-height: min(42vh, 420px); overflow: auto; border: 1px solid var(--kvt-line);
+            border-radius: 10px; contain: content;
+        }
+        .moneta-forecast-row {
+            display: flex; gap: 8px; align-items: center; justify-content: space-between;
+            padding: 8px 10px; border-bottom: 1px solid var(--kvt-line); background: #fff;
+        }
+        .moneta-forecast-row:last-child { border-bottom: 0; }
+        .moneta-forecast-row-main { min-width: 0; flex: 1; }
+        .moneta-forecast-row-title {
+            font-weight: 700; color: var(--kvt-text); white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis;
+        }
+        .moneta-forecast-row-meta {
+            font-size: 0.82rem; color: var(--kvt-muted); white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis;
+        }
+        .moneta-forecast-row-actions { display: flex; gap: 4px; flex: 0 0 auto; }
+        .moneta-forecast-edit { display: none; }
+        .moneta-forecast-edit.is-open { display: block; }
+        .moneta-forecast-browse.is-hidden { display: none; }
+        .moneta-section-count { font-weight: 400; text-transform: none; letter-spacing: 0; }
         @media (min-width: 640px) {
             .moneta-form-grid { grid-template-columns: 1.4fr 1fr 1fr auto; align-items: end; }
             .moneta-chart-wrap { height: 400px; }
             .moneta-row-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .moneta-row-grid.moneta-row-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .moneta-row-grid.moneta-row-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+            .moneta-forecast-filters { grid-template-columns: 1.4fr 1fr; }
         }
         .moneta-loader {
             position: fixed; inset: 0; z-index: 12000; display: flex; align-items: center;
@@ -313,17 +340,43 @@ $today = date('Y-m-d');
         <p class="moneta-subtitle"><?= moneta_h(LOC('moneta.forecast.subtitle')) ?></p>
         <p class="moneta-save-state" id="moneta-forecast-save-state"></p>
 
-        <p class="moneta-section-title"><?= moneta_h(LOC('moneta.forecast.one_time')) ?></p>
-        <div id="moneta-forecast-one-time-list"></div>
-        <div class="moneta-modal-actions">
-            <button type="button" class="moneta-btn" id="moneta-add-one-time"><?= moneta_h(LOC('moneta.forecast.add_one_time')) ?></button>
+        <div id="moneta-forecast-browse">
+            <div class="moneta-forecast-filters">
+                <input type="search" class="moneta-picker-search" id="moneta-forecast-search"
+                       placeholder="<?= moneta_h(LOC('moneta.forecast.search')) ?>" style="margin:0">
+                <select id="moneta-forecast-account-filter" aria-label="<?= moneta_h(LOC('moneta.forecast.filter_account')) ?>">
+                    <option value=""><?= moneta_h(LOC('moneta.forecast.all_accounts')) ?></option>
+                </select>
+            </div>
+
+            <p class="moneta-section-title">
+                <?= moneta_h(LOC('moneta.forecast.one_time')) ?>
+                <span class="moneta-section-count" id="moneta-one-time-count"></span>
+            </p>
+            <div class="moneta-forecast-list" id="moneta-forecast-one-time-list"></div>
+            <div class="moneta-modal-actions">
+                <button type="button" class="moneta-btn" id="moneta-add-one-time"><?= moneta_h(LOC('moneta.forecast.add_one_time')) ?></button>
+            </div>
+
+            <p class="moneta-section-title" style="margin-top:16px">
+                <?= moneta_h(LOC('moneta.forecast.rules')) ?>
+                <span class="moneta-section-count" id="moneta-rules-count"></span>
+            </p>
+            <div class="moneta-forecast-list" id="moneta-forecast-rules-list"></div>
+            <div class="moneta-modal-actions">
+                <button type="button" class="moneta-btn" id="moneta-add-rule"><?= moneta_h(LOC('moneta.forecast.add_rule')) ?></button>
+                <button type="button" class="moneta-btn-secondary" id="moneta-close-forecast"><?= moneta_h(LOC('moneta.groups.close')) ?></button>
+            </div>
         </div>
 
-        <p class="moneta-section-title" style="margin-top:20px"><?= moneta_h(LOC('moneta.forecast.rules')) ?></p>
-        <div id="moneta-forecast-rules-list"></div>
-        <div class="moneta-modal-actions">
-            <button type="button" class="moneta-btn" id="moneta-add-rule"><?= moneta_h(LOC('moneta.forecast.add_rule')) ?></button>
-            <button type="button" class="moneta-btn-secondary" id="moneta-close-forecast"><?= moneta_h(LOC('moneta.groups.close')) ?></button>
+        <div class="moneta-forecast-edit" id="moneta-forecast-edit">
+            <p class="moneta-section-title" id="moneta-forecast-edit-heading"><?= moneta_h(LOC('moneta.forecast.edit_title')) ?></p>
+            <div id="moneta-forecast-edit-form"></div>
+            <div class="moneta-modal-actions">
+                <button type="button" class="moneta-btn" id="moneta-forecast-save-item"><?= moneta_h(LOC('moneta.forecast.save_item')) ?></button>
+                <button type="button" class="moneta-btn-secondary" id="moneta-forecast-cancel-edit"><?= moneta_h(LOC('moneta.forecast.cancel_edit')) ?></button>
+                <button type="button" class="moneta-btn-icon moneta-btn-danger" id="moneta-forecast-delete-item" title="<?= moneta_h(LOC('moneta.forecast.remove')) ?>">×</button>
+            </div>
         </div>
     </div>
 </div>
@@ -427,6 +480,12 @@ $today = date('Y-m-d');
         unitYear: <?= json_encode(LOC('moneta.forecast.unit.year'), JSON_UNESCAPED_UNICODE) ?>,
         required: <?= json_encode(LOC('moneta.forecast.validation.required'), JSON_UNESCAPED_UNICODE) ?>,
         endBeforeStart: <?= json_encode(LOC('moneta.forecast.validation.end_before_start'), JSON_UNESCAPED_UNICODE) ?>,
+        edit: <?= json_encode(LOC('moneta.forecast.edit'), JSON_UNESCAPED_UNICODE) ?>,
+        untitled: <?= json_encode(LOC('moneta.forecast.untitled'), JSON_UNESCAPED_UNICODE) ?>,
+        emptyFiltered: <?= json_encode(LOC('moneta.forecast.empty_filtered'), JSON_UNESCAPED_UNICODE) ?>,
+        emptyList: <?= json_encode(LOC('moneta.forecast.empty_list'), JSON_UNESCAPED_UNICODE) ?>,
+        allAccounts: <?= json_encode(LOC('moneta.forecast.all_accounts'), JSON_UNESCAPED_UNICODE) ?>,
+        countLabel: <?= json_encode(LOC('moneta.forecast.count'), JSON_UNESCAPED_UNICODE) ?>,
         confirmDeleteChart: <?= json_encode(LOC('moneta.confirm.delete_chart'), JSON_UNESCAPED_UNICODE) ?>
     };
 
@@ -442,19 +501,22 @@ $today = date('Y-m-d');
     let groupsDirty = false;
     let groupsSaveTimer = null;
     let groupsSavePromise = null;
+    let groupsSaveGen = 0;
 
     let derivedSeries = [];
     let derivedDirty = false;
     let derivedSaveTimer = null;
     let derivedSavePromise = null;
+    let derivedSaveGen = 0;
     let derivedChartId = null;
 
     let oneTimeItems = [];
     let ruleItems = [];
     let forecastDirty = false;
-    let forecastSaveTimer = null;
-    let forecastSavePromise = null;
-    let pickerMode = null; // { type: 'group'|'one_time'|'rule', index }
+    let forecastFilterAccount = '';
+    let forecastSearch = '';
+    let forecastEdit = null; // { kind: 'one_time'|'rule', item: object }
+    let pickerMode = null; // { type: 'group'|'edit_account', index? }
 
     const chartsRoot = document.getElementById('moneta-charts-root');
     const groupsModal = document.getElementById('moneta-groups-modal');
@@ -468,6 +530,13 @@ $today = date('Y-m-d');
     const forecastSaveState = document.getElementById('moneta-forecast-save-state');
     const oneTimeList = document.getElementById('moneta-forecast-one-time-list');
     const rulesList = document.getElementById('moneta-forecast-rules-list');
+    const forecastBrowse = document.getElementById('moneta-forecast-browse');
+    const forecastEditPanel = document.getElementById('moneta-forecast-edit');
+    const forecastEditForm = document.getElementById('moneta-forecast-edit-form');
+    const forecastSearchInput = document.getElementById('moneta-forecast-search');
+    const forecastAccountFilter = document.getElementById('moneta-forecast-account-filter');
+    const oneTimeCountEl = document.getElementById('moneta-one-time-count');
+    const rulesCountEl = document.getElementById('moneta-rules-count');
     const pickerList = document.getElementById('moneta-picker-list');
     const pickerSearch = document.getElementById('moneta-picker-search');
 
@@ -613,6 +682,31 @@ $today = date('Y-m-d');
             chartInstances[chartId].destroy();
             delete chartInstances[chartId];
         }
+    }
+
+    function updateChartInPlace(chartId, chartPayload) {
+        const chart = chartInstances[chartId];
+        if (!chart || !chartPayload || !Array.isArray(chartPayload.labels) || chartPayload.labels.length === 0) {
+            return false;
+        }
+        const series = chartPayload.series || [];
+        if (!series.length) {
+            return false;
+        }
+        const tIdx = todayIndex(chartPayload.labels);
+        chart.data.labels = chartPayload.labels.map(formatDateLabel);
+        chart.data.datasets = series.map(function (s, i) { return chartDatasetOptions(s, i, tIdx); });
+        chart.$todayIndex = tIdx;
+        chart.update('none');
+        return true;
+    }
+
+    function applyChartPayload(chartId, chartPayload) {
+        chartPayloads[chartId] = chartPayload || { labels: [], series: [] };
+        if (updateChartInPlace(chartId, chartPayloads[chartId])) {
+            return;
+        }
+        renderCharts();
     }
 
     function renderCharts() {
@@ -794,17 +888,37 @@ $today = date('Y-m-d');
             date_from: dateFrom,
             date_to: dateTo
         });
-        chartPayloads[chartId] = data.chart || { labels: [], series: [] };
         const chartMeta = charts.find(function (c) { return c.id === chartId; });
         if (chartMeta && Array.isArray(data.groups)) {
             chartMeta.groups = data.groups;
         }
-        renderCharts();
+        applyChartPayload(chartId, data.chart || { labels: [], series: [] });
     }
 
     async function refreshAllCharts() {
-        for (let i = 0; i < charts.length; i++) {
-            await refreshChart(charts[i].id);
+        const results = await Promise.all(charts.map(function (chart) {
+            return apiGet('chart_data', {
+                chart_id: chart.id,
+                date_from: dateFrom,
+                date_to: dateTo
+            }).then(function (data) {
+                return { id: chart.id, data: data };
+            });
+        }));
+        let needsFullRender = false;
+        results.forEach(function (result) {
+            const payload = (result.data && result.data.chart) || { labels: [], series: [] };
+            chartPayloads[result.id] = payload;
+            const chartMeta = charts.find(function (c) { return c.id === result.id; });
+            if (chartMeta && result.data && Array.isArray(result.data.groups)) {
+                chartMeta.groups = result.data.groups;
+            }
+            if (!updateChartInPlace(result.id, payload)) {
+                needsFullRender = true;
+            }
+        });
+        if (needsFullRender) {
+            renderCharts();
         }
     }
 
@@ -830,7 +944,7 @@ $today = date('Y-m-d');
         groupsSaveState.textContent = i18n.saving;
         groupsSaveTimer = setTimeout(function () {
             groupsSavePromise = persistGroups();
-        }, 400);
+        }, 450);
     }
 
     async function flushGroupsSave() {
@@ -842,23 +956,46 @@ $today = date('Y-m-d');
         }
     }
 
+    /** Server-ids terugzetten zonder de modal te hertekenen (voorkomt focus/tekst-reset). */
+    function mergeSavedIds(localItems, savedItems) {
+        if (!Array.isArray(localItems) || !Array.isArray(savedItems)) {
+            return;
+        }
+        const n = Math.min(localItems.length, savedItems.length);
+        for (let i = 0; i < n; i++) {
+            if (savedItems[i] && savedItems[i].id != null) {
+                localItems[i].id = savedItems[i].id;
+            }
+        }
+    }
+
     async function persistGroups() {
+        const gen = ++groupsSaveGen;
+        const payload = {
+            chart_id: activeChartId,
+            groups: normalizeGroupsForSave()
+        };
         try {
-            const data = await apiPost('save_groups', {
-                chart_id: activeChartId,
-                groups: normalizeGroupsForSave()
-            });
-            groups = data.groups || [];
-            if (Array.isArray(data.group_options)) groupOptions = data.group_options;
-            renderGroups();
+            const data = await apiPost('save_groups', payload);
+            if (gen !== groupsSaveGen) {
+                return true;
+            }
+            mergeSavedIds(groups, data.groups || []);
+            if (Array.isArray(data.group_options)) {
+                groupOptions = data.group_options;
+            }
             groupsSaveState.textContent = i18n.saved;
             groupsDirty = true;
             return true;
         } catch (error) {
-            groupsSaveState.textContent = i18n.saveFailed + ': ' + (error.message || error);
+            if (gen === groupsSaveGen) {
+                groupsSaveState.textContent = i18n.saveFailed + ': ' + (error.message || error);
+            }
             return false;
         } finally {
-            groupsSavePromise = null;
+            if (groupsSavePromise) {
+                groupsSavePromise = null;
+            }
         }
     }
 
@@ -881,8 +1018,8 @@ $today = date('Y-m-d');
             nameInput.value = group.name || '';
             nameInput.addEventListener('input', function () {
                 groups[groupIndex].name = nameInput.value;
-                scheduleGroupsSave();
             });
+            nameInput.addEventListener('change', scheduleGroupsSave);
             const addBtn = document.createElement('button');
             addBtn.type = 'button';
             addBtn.className = 'moneta-btn-icon';
@@ -981,7 +1118,7 @@ $today = date('Y-m-d');
         derivedSaveState.textContent = i18n.saving;
         derivedSaveTimer = setTimeout(function () {
             derivedSavePromise = persistDerived();
-        }, 400);
+        }, 450);
     }
 
     async function flushDerivedSave() {
@@ -994,24 +1131,29 @@ $today = date('Y-m-d');
     }
 
     async function persistDerived() {
+        const gen = ++derivedSaveGen;
+        const payload = derivedSeries.map(function (row) {
+            return {
+                id: row.id > 0 ? row.id : null,
+                name: row.name || i18n.seriesDefault,
+                left_group_id: Number(row.left_group_id) || 0,
+                operator: row.operator || '+',
+                right_group_id: Number(row.right_group_id) || 0
+            };
+        });
         try {
-            const payload = derivedSeries.map(function (row) {
-                return {
-                    id: row.id > 0 ? row.id : null,
-                    name: row.name || i18n.seriesDefault,
-                    left_group_id: Number(row.left_group_id) || 0,
-                    operator: row.operator || '+',
-                    right_group_id: Number(row.right_group_id) || 0
-                };
-            });
             const data = await apiPost('save_derived', { chart_id: derivedChartId, series: payload });
-            derivedSeries = data.derived_series || [];
-            renderDerived();
+            if (gen !== derivedSaveGen) {
+                return true;
+            }
+            mergeSavedIds(derivedSeries, data.derived_series || []);
             derivedSaveState.textContent = i18n.saved;
             derivedDirty = true;
             return true;
         } catch (error) {
-            derivedSaveState.textContent = i18n.saveFailed + ': ' + (error.message || error);
+            if (gen === derivedSaveGen) {
+                derivedSaveState.textContent = i18n.saveFailed + ': ' + (error.message || error);
+            }
             return false;
         } finally {
             derivedSavePromise = null;
@@ -1052,8 +1194,8 @@ $today = date('Y-m-d');
             nameInput.value = row.name || '';
             nameInput.addEventListener('input', function () {
                 derivedSeries[index].name = nameInput.value;
-                scheduleDerivedSave();
             });
+            nameInput.addEventListener('change', scheduleDerivedSave);
 
             const leftSelect = document.createElement('select');
             groupOptions.forEach(function (opt) {
@@ -1100,7 +1242,9 @@ $today = date('Y-m-d');
                 if ((row.operator || '+') === map[sym]) btn.classList.add('is-active');
                 btn.addEventListener('click', function () {
                     derivedSeries[index].operator = map[sym];
-                    renderDerived();
+                    ops.querySelectorAll('button').forEach(function (b) {
+                        b.classList.toggle('is-active', b === btn);
+                    });
                     scheduleDerivedSave();
                 });
                 ops.appendChild(btn);
@@ -1155,85 +1299,151 @@ $today = date('Y-m-d');
     }
 
     // —— Forecast modal ——
-    function scheduleForecastSave() {
-        forecastDirty = true;
-        clearTimeout(forecastSaveTimer);
-        forecastSaveState.textContent = i18n.saving;
-        forecastSaveTimer = setTimeout(function () {
-            forecastSavePromise = persistForecast();
-        }, 500);
-    }
-
-    async function flushForecastSave() {
-        clearTimeout(forecastSaveTimer);
-        if (forecastSavePromise) await forecastSavePromise;
-        else if (forecastDirty) {
-            forecastSavePromise = persistForecast();
-            await forecastSavePromise;
-        }
-    }
-
-    function validateForecast() {
-        for (let i = 0; i < oneTimeItems.length; i++) {
-            const item = oneTimeItems[i];
-            if (!item.account_no || !item.event_date) return i18n.required;
-        }
-        for (let i = 0; i < ruleItems.length; i++) {
-            const item = ruleItems[i];
-            if (!item.account_no || !item.start_date || !(Number(item.repeat_n) >= 1)) return i18n.required;
-            if (item.end_date && item.end_date < item.start_date) return i18n.endBeforeStart;
-        }
-        return '';
-    }
-
-    async function persistForecast() {
-        const validation = validateForecast();
-        if (validation) {
-            forecastSaveState.textContent = validation;
-            forecastSavePromise = null;
+    function forecastMatches(item) {
+        if (forecastFilterAccount && item.account_no !== forecastFilterAccount) {
             return false;
         }
-        try {
-            await apiPost('save_forecast_one_time', {
-                items: oneTimeItems.map(function (item) {
-                    return {
-                        id: item.id > 0 ? item.id : null,
-                        account_no: item.account_no,
-                        name: item.name || '',
-                        description: item.description || '',
-                        amount: Number(item.amount) || 0,
-                        event_date: item.event_date
-                    };
-                })
-            });
-            const rulesData = await apiPost('save_forecast_rules', {
-                items: ruleItems.map(function (item) {
-                    return {
-                        id: item.id > 0 ? item.id : null,
-                        account_no: item.account_no,
-                        name: item.name || '',
-                        description: item.description || '',
-                        amount: Number(item.amount) || 0,
-                        start_date: item.start_date,
-                        repeat_n: Math.max(1, Number(item.repeat_n) || 1),
-                        repeat_unit: item.repeat_unit || 'month',
-                        end_date: item.end_date || null
-                    };
-                })
-            });
-            const oneData = await apiGet('forecast_one_time');
-            oneTimeItems = oneData.items || [];
-            ruleItems = rulesData.items || [];
-            renderForecast();
-            forecastSaveState.textContent = i18n.saved;
-            forecastDirty = true;
+        const needle = String(forecastSearch || '').trim().toLowerCase();
+        if (!needle) {
             return true;
-        } catch (error) {
-            forecastSaveState.textContent = i18n.saveFailed + ': ' + (error.message || error);
-            return false;
-        } finally {
-            forecastSavePromise = null;
         }
+        const hay = ((item.name || '') + ' ' + (item.description || '')).toLowerCase();
+        return hay.indexOf(needle) !== -1;
+    }
+
+    function forecastDisplayName(item) {
+        return (item.name && String(item.name).trim()) ? item.name : i18n.untitled;
+    }
+
+    function forecastAccountLabel(item) {
+        if (!item.account_no) {
+            return i18n.chooseAccount;
+        }
+        return (item.account_no || '') + ' — ' + (item.account_name || item.account_no);
+    }
+
+    function formatCount(n) {
+        return String(i18n.countLabel || '%d').replace('%d', String(n));
+    }
+
+    function rebuildForecastAccountFilter() {
+        const selected = forecastAccountFilter.value;
+        const map = {};
+        oneTimeItems.concat(ruleItems).forEach(function (item) {
+            if (!item.account_no) return;
+            map[item.account_no] = item.account_name || item.account_no;
+        });
+        const accounts = Object.keys(map).sort(function (a, b) {
+            return a.localeCompare(b, undefined, { numeric: true });
+        });
+        forecastAccountFilter.innerHTML = '';
+        const all = document.createElement('option');
+        all.value = '';
+        all.textContent = i18n.allAccounts;
+        forecastAccountFilter.appendChild(all);
+        accounts.forEach(function (no) {
+            const o = document.createElement('option');
+            o.value = no;
+            o.textContent = no + ' — ' + map[no];
+            forecastAccountFilter.appendChild(o);
+        });
+        forecastAccountFilter.value = selected && map[selected] ? selected : '';
+        forecastFilterAccount = forecastAccountFilter.value;
+    }
+
+    function appendForecastRow(listEl, item, kind) {
+        const row = document.createElement('div');
+        row.className = 'moneta-forecast-row';
+        const main = document.createElement('div');
+        main.className = 'moneta-forecast-row-main';
+        const title = document.createElement('div');
+        title.className = 'moneta-forecast-row-title';
+        title.textContent = forecastDisplayName(item);
+        const meta = document.createElement('div');
+        meta.className = 'moneta-forecast-row-meta';
+        if (kind === 'one_time') {
+            meta.textContent = forecastAccountLabel(item) + ' · ' + formatEuro(item.amount) + ' · ' + formatDateLabel(item.event_date || '');
+        } else {
+            const unitMap = { day: i18n.unitDay, week: i18n.unitWeek, month: i18n.unitMonth, year: i18n.unitYear };
+            const unit = unitMap[item.repeat_unit] || item.repeat_unit;
+            meta.textContent = forecastAccountLabel(item) + ' · ' + formatEuro(item.amount)
+                + ' · ' + formatDateLabel(item.start_date || '') + ' / ' + (item.repeat_n || 1) + ' ' + unit
+                + (item.end_date ? (' → ' + formatDateLabel(item.end_date)) : '');
+        }
+        main.appendChild(title);
+        main.appendChild(meta);
+        const actions = document.createElement('div');
+        actions.className = 'moneta-forecast-row-actions';
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'moneta-btn-icon';
+        editBtn.title = i18n.edit;
+        editBtn.textContent = '✎';
+        editBtn.addEventListener('click', function () {
+            openForecastEdit(kind, item);
+        });
+        actions.appendChild(editBtn);
+        row.appendChild(main);
+        row.appendChild(actions);
+        listEl.appendChild(row);
+    }
+
+    function renderForecastLists() {
+        const ones = oneTimeItems.filter(forecastMatches);
+        const rules = ruleItems.filter(forecastMatches);
+        oneTimeCountEl.textContent = '(' + formatCount(ones.length) + ')';
+        rulesCountEl.textContent = '(' + formatCount(rules.length) + ')';
+
+        oneTimeList.innerHTML = '';
+        if (!oneTimeItems.length) {
+            const empty = document.createElement('div');
+            empty.className = 'moneta-empty';
+            empty.style.border = '0';
+            empty.textContent = i18n.emptyList;
+            oneTimeList.appendChild(empty);
+        } else if (!ones.length) {
+            const empty = document.createElement('div');
+            empty.className = 'moneta-empty';
+            empty.style.border = '0';
+            empty.textContent = i18n.emptyFiltered;
+            oneTimeList.appendChild(empty);
+        } else {
+            ones.forEach(function (item) { appendForecastRow(oneTimeList, item, 'one_time'); });
+        }
+
+        rulesList.innerHTML = '';
+        if (!ruleItems.length) {
+            const empty = document.createElement('div');
+            empty.className = 'moneta-empty';
+            empty.style.border = '0';
+            empty.textContent = i18n.emptyList;
+            rulesList.appendChild(empty);
+        } else if (!rules.length) {
+            const empty = document.createElement('div');
+            empty.className = 'moneta-empty';
+            empty.style.border = '0';
+            empty.textContent = i18n.emptyFiltered;
+            rulesList.appendChild(empty);
+        } else {
+            rules.forEach(function (item) { appendForecastRow(rulesList, item, 'rule'); });
+        }
+    }
+
+    function showForecastBrowse() {
+        forecastEdit = null;
+        forecastBrowse.classList.remove('is-hidden');
+        forecastEditPanel.classList.remove('is-open');
+        renderForecastLists();
+    }
+
+    function openForecastEdit(kind, item) {
+        forecastEdit = {
+            kind: kind,
+            item: Object.assign({}, item)
+        };
+        forecastBrowse.classList.add('is-hidden');
+        forecastEditPanel.classList.add('is-open');
+        renderForecastEditForm();
     }
 
     function accountButton(item, onPick) {
@@ -1241,139 +1451,68 @@ $today = date('Y-m-d');
         btn.type = 'button';
         btn.className = 'moneta-btn-secondary';
         btn.style.width = '100%';
-        btn.textContent = item.account_no
-            ? ((item.account_no || '') + ' — ' + (item.account_name || item.account_no))
-            : i18n.chooseAccount;
+        btn.textContent = forecastAccountLabel(item);
         btn.addEventListener('click', onPick);
         return btn;
     }
 
-    function renderForecast() {
-        oneTimeList.innerHTML = '';
-        oneTimeItems.forEach(function (item, index) {
-            const box = document.createElement('div');
-            box.className = 'moneta-row';
-            const grid = document.createElement('div');
-            grid.className = 'moneta-row-grid moneta-row-grid-3';
+    function renderForecastEditForm() {
+        forecastEditForm.innerHTML = '';
+        if (!forecastEdit) return;
+        const item = forecastEdit.item;
+        const kind = forecastEdit.kind;
+        const grid = document.createElement('div');
+        grid.className = 'moneta-row-grid ' + (kind === 'rule' ? 'moneta-row-grid-4' : 'moneta-row-grid-3');
 
-            function addField(label, el) {
-                const lab = document.createElement('label');
-                lab.appendChild(document.createTextNode(label));
-                lab.appendChild(el);
-                grid.appendChild(lab);
-            }
+        function addField(label, el) {
+            const lab = document.createElement('label');
+            lab.appendChild(document.createTextNode(label));
+            lab.appendChild(el);
+            grid.appendChild(lab);
+        }
 
-            addField(i18n.account, accountButton(item, function () {
-                pickerMode = { type: 'one_time', index: index };
-                openPicker();
-            }));
+        addField(i18n.account, accountButton(item, function () {
+            pickerMode = { type: 'edit_account' };
+            openPicker();
+        }));
+
+        const nameInput = document.createElement('input');
+        nameInput.type = 'text';
+        nameInput.value = item.name || '';
+        nameInput.addEventListener('input', function () { item.name = nameInput.value; });
+        addField(i18n.name, nameInput);
+
+        const descInput = document.createElement('input');
+        descInput.type = 'text';
+        descInput.value = item.description || '';
+        descInput.addEventListener('input', function () { item.description = descInput.value; });
+        addField(i18n.description, descInput);
+
+        const amountInput = document.createElement('input');
+        amountInput.type = 'number';
+        amountInput.step = '0.01';
+        amountInput.value = item.amount != null ? item.amount : 0;
+        amountInput.addEventListener('change', function () { item.amount = amountInput.value; });
+        addField(i18n.amount, amountInput);
+
+        if (kind === 'one_time') {
             const dateInput = document.createElement('input');
             dateInput.type = 'date';
             dateInput.value = item.event_date || '';
-            dateInput.addEventListener('change', function () {
-                oneTimeItems[index].event_date = dateInput.value;
-                scheduleForecastSave();
-            });
+            dateInput.addEventListener('change', function () { item.event_date = dateInput.value; });
             addField(i18n.eventDate, dateInput);
-            const amountInput = document.createElement('input');
-            amountInput.type = 'number';
-            amountInput.step = '0.01';
-            amountInput.value = item.amount != null ? item.amount : 0;
-            amountInput.addEventListener('change', function () {
-                oneTimeItems[index].amount = amountInput.value;
-                scheduleForecastSave();
-            });
-            addField(i18n.amount, amountInput);
-            const nameInput = document.createElement('input');
-            nameInput.type = 'text';
-            nameInput.value = item.name || '';
-            nameInput.addEventListener('input', function () {
-                oneTimeItems[index].name = nameInput.value;
-                scheduleForecastSave();
-            });
-            addField(i18n.name, nameInput);
-            const descInput = document.createElement('input');
-            descInput.type = 'text';
-            descInput.value = item.description || '';
-            descInput.addEventListener('input', function () {
-                oneTimeItems[index].description = descInput.value;
-                scheduleForecastSave();
-            });
-            addField(i18n.description, descInput);
-
-            box.appendChild(grid);
-            const del = document.createElement('button');
-            del.type = 'button';
-            del.className = 'moneta-btn-icon moneta-btn-danger';
-            del.title = i18n.removeItem;
-            del.textContent = '×';
-            del.addEventListener('click', function () {
-                oneTimeItems.splice(index, 1);
-                renderForecast();
-                scheduleForecastSave();
-            });
-            box.appendChild(del);
-            oneTimeList.appendChild(box);
-        });
-
-        rulesList.innerHTML = '';
-        ruleItems.forEach(function (item, index) {
-            const box = document.createElement('div');
-            box.className = 'moneta-row';
-            const grid = document.createElement('div');
-            grid.className = 'moneta-row-grid moneta-row-grid-4';
-
-            function addField(label, el) {
-                const lab = document.createElement('label');
-                lab.appendChild(document.createTextNode(label));
-                lab.appendChild(el);
-                grid.appendChild(lab);
-            }
-
-            addField(i18n.account, accountButton(item, function () {
-                pickerMode = { type: 'rule', index: index };
-                openPicker();
-            }));
-            const nameInput = document.createElement('input');
-            nameInput.type = 'text';
-            nameInput.value = item.name || '';
-            nameInput.addEventListener('input', function () {
-                ruleItems[index].name = nameInput.value;
-                scheduleForecastSave();
-            });
-            addField(i18n.name, nameInput);
-            const descInput = document.createElement('input');
-            descInput.type = 'text';
-            descInput.value = item.description || '';
-            descInput.addEventListener('input', function () {
-                ruleItems[index].description = descInput.value;
-                scheduleForecastSave();
-            });
-            addField(i18n.description, descInput);
-            const amountInput = document.createElement('input');
-            amountInput.type = 'number';
-            amountInput.step = '0.01';
-            amountInput.value = item.amount != null ? item.amount : 0;
-            amountInput.addEventListener('change', function () {
-                ruleItems[index].amount = amountInput.value;
-                scheduleForecastSave();
-            });
-            addField(i18n.amount, amountInput);
+        } else {
             const startInput = document.createElement('input');
             startInput.type = 'date';
             startInput.value = item.start_date || '';
-            startInput.addEventListener('change', function () {
-                ruleItems[index].start_date = startInput.value;
-                scheduleForecastSave();
-            });
+            startInput.addEventListener('change', function () { item.start_date = startInput.value; });
             addField(i18n.startDate, startInput);
             const nInput = document.createElement('input');
             nInput.type = 'number';
             nInput.min = '1';
             nInput.value = item.repeat_n || 1;
             nInput.addEventListener('change', function () {
-                ruleItems[index].repeat_n = Math.max(1, Number(nInput.value) || 1);
-                scheduleForecastSave();
+                item.repeat_n = Math.max(1, Number(nInput.value) || 1);
             });
             addField(i18n.repeatN, nInput);
             const unitSelect = document.createElement('select');
@@ -1389,55 +1528,143 @@ $today = date('Y-m-d');
                 if ((item.repeat_unit || 'month') === pair[0]) o.selected = true;
                 unitSelect.appendChild(o);
             });
-            unitSelect.addEventListener('change', function () {
-                ruleItems[index].repeat_unit = unitSelect.value;
-                scheduleForecastSave();
-            });
+            unitSelect.addEventListener('change', function () { item.repeat_unit = unitSelect.value; });
             addField(i18n.repeatUnit, unitSelect);
             const endInput = document.createElement('input');
             endInput.type = 'date';
             endInput.value = item.end_date || '';
-            endInput.addEventListener('change', function () {
-                ruleItems[index].end_date = endInput.value || null;
-                scheduleForecastSave();
-            });
+            endInput.addEventListener('change', function () { item.end_date = endInput.value || null; });
             addField(i18n.endDate, endInput);
+        }
 
-            box.appendChild(grid);
-            const del = document.createElement('button');
-            del.type = 'button';
-            del.className = 'moneta-btn-icon moneta-btn-danger';
-            del.title = i18n.removeItem;
-            del.textContent = '×';
-            del.addEventListener('click', function () {
-                ruleItems.splice(index, 1);
-                renderForecast();
-                scheduleForecastSave();
-            });
-            box.appendChild(del);
-            rulesList.appendChild(box);
-        });
+        forecastEditForm.appendChild(grid);
+    }
+
+    function validateEditItem() {
+        if (!forecastEdit) return i18n.required;
+        const item = forecastEdit.item;
+        if (!item.account_no) return i18n.required;
+        if (forecastEdit.kind === 'one_time') {
+            if (!item.event_date) return i18n.required;
+        } else {
+            if (!item.start_date || !(Number(item.repeat_n) >= 1)) return i18n.required;
+            if (item.end_date && item.end_date < item.start_date) return i18n.endBeforeStart;
+        }
+        return '';
+    }
+
+    async function saveForecastEdit() {
+        const validation = validateEditItem();
+        if (validation) {
+            forecastSaveState.textContent = validation;
+            return false;
+        }
+        forecastSaveState.textContent = i18n.saving;
+        try {
+            if (forecastEdit.kind === 'one_time') {
+                const data = await apiPost('upsert_forecast_one_time', {
+                    item: {
+                        id: forecastEdit.item.id > 0 ? forecastEdit.item.id : null,
+                        account_no: forecastEdit.item.account_no,
+                        name: forecastEdit.item.name || '',
+                        description: forecastEdit.item.description || '',
+                        amount: Number(forecastEdit.item.amount) || 0,
+                        event_date: forecastEdit.item.event_date
+                    }
+                });
+                const saved = data.item;
+                const idx = oneTimeItems.findIndex(function (row) { return row.id === forecastEdit.item.id; });
+                if (idx >= 0) oneTimeItems[idx] = saved;
+                else oneTimeItems.push(saved);
+            } else {
+                const data = await apiPost('upsert_forecast_rule', {
+                    item: {
+                        id: forecastEdit.item.id > 0 ? forecastEdit.item.id : null,
+                        account_no: forecastEdit.item.account_no,
+                        name: forecastEdit.item.name || '',
+                        description: forecastEdit.item.description || '',
+                        amount: Number(forecastEdit.item.amount) || 0,
+                        start_date: forecastEdit.item.start_date,
+                        repeat_n: Math.max(1, Number(forecastEdit.item.repeat_n) || 1),
+                        repeat_unit: forecastEdit.item.repeat_unit || 'month',
+                        end_date: forecastEdit.item.end_date || null
+                    }
+                });
+                const saved = data.item;
+                const idx = ruleItems.findIndex(function (row) { return row.id === forecastEdit.item.id; });
+                if (idx >= 0) ruleItems[idx] = saved;
+                else ruleItems.push(saved);
+            }
+            forecastDirty = true;
+            forecastSaveState.textContent = i18n.saved;
+            rebuildForecastAccountFilter();
+            showForecastBrowse();
+            return true;
+        } catch (error) {
+            forecastSaveState.textContent = i18n.saveFailed + ': ' + (error.message || error);
+            return false;
+        }
+    }
+
+    async function deleteForecastEdit() {
+        if (!forecastEdit) return;
+        forecastSaveState.textContent = i18n.saving;
+        try {
+            const id = forecastEdit.item.id;
+            if (id > 0) {
+                if (forecastEdit.kind === 'one_time') {
+                    await apiPost('delete_forecast_one_time', { id: id });
+                    oneTimeItems = oneTimeItems.filter(function (row) { return row.id !== id; });
+                } else {
+                    await apiPost('delete_forecast_rule', { id: id });
+                    ruleItems = ruleItems.filter(function (row) { return row.id !== id; });
+                }
+            } else if (forecastEdit.kind === 'one_time') {
+                oneTimeItems = oneTimeItems.filter(function (row) { return row !== forecastEdit.item && row.id !== id; });
+            } else {
+                ruleItems = ruleItems.filter(function (row) { return row !== forecastEdit.item && row.id !== id; });
+            }
+            forecastDirty = true;
+            forecastSaveState.textContent = i18n.saved;
+            rebuildForecastAccountFilter();
+            showForecastBrowse();
+        } catch (error) {
+            forecastSaveState.textContent = i18n.saveFailed + ': ' + (error.message || error);
+        }
     }
 
     async function openForecastModal() {
         forecastDirty = false;
         forecastSaveState.textContent = '';
+        forecastSearch = '';
+        forecastFilterAccount = '';
+        forecastSearchInput.value = '';
+        showForecastBrowse();
+        openModal(forecastModal);
+        oneTimeList.innerHTML = '<div class="moneta-empty" style="border:0">…</div>';
+        rulesList.innerHTML = '';
         try {
-            const one = await apiGet('forecast_one_time');
-            const rules = await apiGet('forecast_rules');
-            oneTimeItems = one.items || [];
-            ruleItems = rules.items || [];
-            renderForecast();
-            openModal(forecastModal);
+            const data = await apiGet('forecast');
+            oneTimeItems = data.one_time || [];
+            ruleItems = data.rules || [];
+            rebuildForecastAccountFilter();
+            renderForecastLists();
         } catch (error) {
-            alert(error.message || String(error));
+            oneTimeList.innerHTML = '';
+            const empty = document.createElement('div');
+            empty.className = 'moneta-empty';
+            empty.textContent = error.message || String(error);
+            oneTimeList.appendChild(empty);
         }
     }
 
     async function closeForecastModalAndRefresh() {
+        if (forecastEdit) {
+            showForecastBrowse();
+            return;
+        }
         closeModal(forecastModal);
         try {
-            await flushForecastSave();
             if (forecastDirty) {
                 await refreshAllCharts();
                 forecastDirty = false;
@@ -1499,18 +1726,11 @@ $today = date('Y-m-d');
                     closeModal(pickerModal);
                     renderGroups();
                     scheduleGroupsSave();
-                } else if (pickerMode.type === 'one_time' && oneTimeItems[pickerMode.index]) {
-                    oneTimeItems[pickerMode.index].account_no = account.account_no;
-                    oneTimeItems[pickerMode.index].account_name = account.account_name;
+                } else if (pickerMode.type === 'edit_account' && forecastEdit) {
+                    forecastEdit.item.account_no = account.account_no;
+                    forecastEdit.item.account_name = account.account_name;
                     closeModal(pickerModal);
-                    renderForecast();
-                    scheduleForecastSave();
-                } else if (pickerMode.type === 'rule' && ruleItems[pickerMode.index]) {
-                    ruleItems[pickerMode.index].account_no = account.account_no;
-                    ruleItems[pickerMode.index].account_name = account.account_name;
-                    closeModal(pickerModal);
-                    renderForecast();
-                    scheduleForecastSave();
+                    renderForecastEditForm();
                 }
             });
             pickerList.appendChild(btn);
@@ -1566,7 +1786,7 @@ $today = date('Y-m-d');
         scheduleDerivedSave();
     });
     document.getElementById('moneta-add-one-time').addEventListener('click', function () {
-        oneTimeItems.push({
+        openForecastEdit('one_time', {
             id: tempId--,
             account_no: '',
             account_name: '',
@@ -1575,10 +1795,9 @@ $today = date('Y-m-d');
             amount: 0,
             event_date: today
         });
-        renderForecast();
     });
     document.getElementById('moneta-add-rule').addEventListener('click', function () {
-        ruleItems.push({
+        openForecastEdit('rule', {
             id: tempId--,
             account_no: '',
             account_name: '',
@@ -1590,7 +1809,24 @@ $today = date('Y-m-d');
             repeat_unit: 'month',
             end_date: null
         });
-        renderForecast();
+    });
+    document.getElementById('moneta-forecast-save-item').addEventListener('click', function () {
+        saveForecastEdit();
+    });
+    document.getElementById('moneta-forecast-cancel-edit').addEventListener('click', function () {
+        showForecastBrowse();
+        forecastSaveState.textContent = '';
+    });
+    document.getElementById('moneta-forecast-delete-item').addEventListener('click', function () {
+        deleteForecastEdit();
+    });
+    forecastSearchInput.addEventListener('input', function () {
+        forecastSearch = forecastSearchInput.value;
+        renderForecastLists();
+    });
+    forecastAccountFilter.addEventListener('change', function () {
+        forecastFilterAccount = forecastAccountFilter.value;
+        renderForecastLists();
     });
     pickerSearch.addEventListener('input', function () {
         renderPicker(pickerSearch.value);

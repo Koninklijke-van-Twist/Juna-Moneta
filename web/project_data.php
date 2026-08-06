@@ -82,7 +82,7 @@ function project_default_companies(): array
     ];
 }
 
-function project_companies_for_page(int $ttl = 3600): array
+function project_companies_for_page(int $ttl = AUTH_COMPANIES_ODATA_TTL): array
 {
     try {
         $result = auth_discover_companies_across_active_environments($ttl);

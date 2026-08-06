@@ -185,7 +185,13 @@ function read_cache_payload(string $path, int $fallbackTtlSeconds): array
     }
 
     if (isset($payload['_meta']) && isset($payload['data']) && is_array($payload['data'])) {
+        $cachedAt = (int) ($payload['_meta']['cached_at'] ?? 0);
         $expiresAt = (int) ($payload['_meta']['expires_at'] ?? 0);
+        // Aanroep-TTL mag langer zijn dan toen het bestand geschreven werd
+        // (bijv. company-discovery van 5 min → 30 dagen).
+        if ($cachedAt > 0 && $fallbackTtlSeconds > 0) {
+            $expiresAt = max($expiresAt, $cachedAt + $fallbackTtlSeconds);
+        }
         if ($expiresAt > 0 && time() <= $expiresAt) {
             return ['valid' => true, 'delete' => false, 'data' => $payload['data']];
         }

@@ -123,9 +123,14 @@ function auth_build_companies_urls(string $environment): array
 }
 
 /**
+ * Company-discovery verandert zelden → lang in OData-cache houden.
+ */
+const AUTH_COMPANIES_ODATA_TTL = 2592000; // 30 dagen
+
+/**
  * Haalt companies op via OData helper of cURL fallback.
  */
-function auth_fetch_companies_for_environment(string $environment, int $ttlSeconds = 300): array
+function auth_fetch_companies_for_environment(string $environment, int $ttlSeconds = AUTH_COMPANIES_ODATA_TTL): array
 {
     $auth = auth_get_auth_for_environment($environment);
     $urls = auth_build_companies_urls($environment);
@@ -230,7 +235,7 @@ function auth_fetch_companies_for_environment_via_curl(string $url, array $auth)
 /**
  * Ontdekt bedrijven over alle actieve environments en bouwt de map.
  */
-function auth_discover_companies_across_active_environments(int $ttlSeconds = 300): array
+function auth_discover_companies_across_active_environments(int $ttlSeconds = AUTH_COMPANIES_ODATA_TTL): array
 {
     $activeEnvironments = auth_get_active_environments();
     if ($activeEnvironments === []) {
@@ -336,7 +341,7 @@ function auth_discover_companies_across_active_environments(int $ttlSeconds = 30
 /**
  * Geeft de company->environment map terug, met lazy discovery.
  */
-function auth_get_company_environment_map(int $ttlSeconds = 300, bool $refresh = false): array
+function auth_get_company_environment_map(int $ttlSeconds = AUTH_COMPANIES_ODATA_TTL, bool $refresh = false): array
 {
     $current = $GLOBALS['demeter_company_environment_map'] ?? null;
     if (!$refresh && is_array($current) && $current !== []) {
@@ -350,7 +355,7 @@ function auth_get_company_environment_map(int $ttlSeconds = 300, bool $refresh =
 /**
  * Geeft het environment voor een gekozen company.
  */
-function auth_get_environment_for_company(string $company, int $ttlSeconds = 300): string
+function auth_get_environment_for_company(string $company, int $ttlSeconds = AUTH_COMPANIES_ODATA_TTL): string
 {
     $companyName = trim($company);
     if ($companyName === '') {
@@ -374,7 +379,7 @@ function auth_get_environment_for_company(string $company, int $ttlSeconds = 300
 /**
  * Geeft de auth voor een gekozen company.
  */
-function auth_get_auth_for_company(string $company, int $ttlSeconds = 300): array
+function auth_get_auth_for_company(string $company, int $ttlSeconds = AUTH_COMPANIES_ODATA_TTL): array
 {
     $environment = auth_get_environment_for_company($company, $ttlSeconds);
     return auth_get_auth_for_environment($environment);
@@ -383,7 +388,7 @@ function auth_get_auth_for_company(string $company, int $ttlSeconds = 300): arra
 /**
  * Stelt globale context in op basis van een gekozen company.
  */
-function auth_set_current_company_context(?string $company, int $ttlSeconds = 300): array
+function auth_set_current_company_context(?string $company, int $ttlSeconds = AUTH_COMPANIES_ODATA_TTL): array
 {
     global $environment, $auth;
 
