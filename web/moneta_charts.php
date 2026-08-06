@@ -642,11 +642,12 @@ function moneta_balance_chart_data(
 }
 
 /**
- * History uit gecachte groepssom (incl. negate); forecast vanaf morgen met signed deltas.
+ * History uit gecachte groepssom (incl. negate); forecast vanaf morgen
+ * met ongesigneerde account-deltas (negate geldt alleen voor historie).
  *
  * @param list<string> $labels
  * @param array<string, float> $points date => signed balance
- * @param array<string, float> $signs account_no => ±1
+ * @param array<string, float> $signs account_no => ±1 (alleen membership voor forecast)
  * @param array<string, array<string, float>> $forecastDeltas
  * @return list<float|null>
  */
@@ -680,9 +681,10 @@ function moneta_build_balance_series_data(
         }
 
         $dayDelta = 0.0;
-        foreach ($signs as $accountNo => $sign) {
+        foreach ($signs as $accountNo => $_sign) {
             if (isset($forecastDeltas[$accountNo][$label])) {
-                $dayDelta += (float) $forecastDeltas[$accountNo][$label] * (float) $sign;
+                // Negate beïnvloedt alleen de historische groepssom, niet de prognose.
+                $dayDelta += (float) $forecastDeltas[$accountNo][$label];
             }
         }
         $lastKnown += $dayDelta;
