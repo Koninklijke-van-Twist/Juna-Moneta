@@ -66,7 +66,6 @@ if (!is_trusted_requester()) {
                 CURLOPT_HTTPHEADER => ['X-API-Key: ' . $analyticsApiKey],
             ]);
             curl_exec($analyticsCurl);
-            curl_close($analyticsCurl);
         }
     }
 }

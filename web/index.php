@@ -1,7 +1,7 @@
 <?php
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/logincheck.php';
@@ -9,6 +9,8 @@ require_once __DIR__ . '/localization.php';
 require_once __DIR__ . '/odata.php';
 require_once __DIR__ . '/auth_helper.php';
 require_once __DIR__ . '/moneta_data.php';
+
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
 
 function moneta_h(?string $value): string
 {
@@ -202,6 +204,19 @@ $today = date('Y-m-d');
         .moneta-ops button.is-active {
             background: var(--kvt-main-blue); color: #fff; border-color: var(--kvt-main-blue);
         }
+        .moneta-lines-block {
+            margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--kvt-line);
+        }
+        .moneta-color-input {
+            width: 52px; height: 42px; padding: 4px; cursor: pointer;
+            border-radius: 8px; border: 1px solid var(--kvt-line); background: #fff;
+            box-sizing: border-box;
+        }
+        .moneta-line-row {
+            display: grid; gap: 8px; align-items: end;
+            border: 1px solid var(--kvt-line); border-radius: 10px; padding: 12px; margin-bottom: 10px;
+        }
+        .moneta-line-row label { display: grid; gap: 4px; font-size: 0.82rem; color: var(--kvt-muted); font-weight: 700; }
         .moneta-charts-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
         .moneta-forecast-filters {
             display: grid; gap: 8px; margin-bottom: 12px;
@@ -236,6 +251,7 @@ $today = date('Y-m-d');
             .moneta-row-grid.moneta-row-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .moneta-row-grid.moneta-row-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
             .moneta-forecast-filters { grid-template-columns: 1.4fr 1fr; }
+            .moneta-line-row { grid-template-columns: 1fr auto 1fr auto; }
         }
         .moneta-loader {
             position: fixed; inset: 0; z-index: 12000; display: flex; align-items: center;
@@ -316,6 +332,14 @@ $today = date('Y-m-d');
         <div id="moneta-groups-list"></div>
         <div class="moneta-modal-actions">
             <button type="button" class="moneta-btn" id="moneta-add-group"><?= moneta_h(LOC('moneta.groups.add')) ?></button>
+        </div>
+        <div class="moneta-lines-block">
+            <p class="moneta-section-title"><?= moneta_h(LOC('moneta.lines.title')) ?></p>
+            <p class="moneta-subtitle"><?= moneta_h(LOC('moneta.lines.subtitle')) ?></p>
+            <div id="moneta-groups-lines"></div>
+        </div>
+        <div class="moneta-modal-actions">
+            <button type="button" class="moneta-btn" id="moneta-add-group-line"><?= moneta_h(LOC('moneta.lines.add')) ?></button>
             <button type="button" class="moneta-btn-secondary" id="moneta-close-groups"><?= moneta_h(LOC('moneta.groups.close')) ?></button>
         </div>
     </div>
@@ -329,6 +353,14 @@ $today = date('Y-m-d');
         <div id="moneta-derived-list"></div>
         <div class="moneta-modal-actions">
             <button type="button" class="moneta-btn" id="moneta-add-derived-series"><?= moneta_h(LOC('moneta.derived.add')) ?></button>
+        </div>
+        <div class="moneta-lines-block">
+            <p class="moneta-section-title"><?= moneta_h(LOC('moneta.lines.title')) ?></p>
+            <p class="moneta-subtitle"><?= moneta_h(LOC('moneta.lines.subtitle')) ?></p>
+            <div id="moneta-derived-lines"></div>
+        </div>
+        <div class="moneta-modal-actions">
+            <button type="button" class="moneta-btn" id="moneta-add-derived-line"><?= moneta_h(LOC('moneta.lines.add')) ?></button>
             <button type="button" class="moneta-btn-secondary" id="moneta-close-derived"><?= moneta_h(LOC('moneta.groups.close')) ?></button>
         </div>
     </div>
@@ -486,7 +518,13 @@ $today = date('Y-m-d');
         emptyList: <?= json_encode(LOC('moneta.forecast.empty_list'), JSON_UNESCAPED_UNICODE) ?>,
         allAccounts: <?= json_encode(LOC('moneta.forecast.all_accounts'), JSON_UNESCAPED_UNICODE) ?>,
         countLabel: <?= json_encode(LOC('moneta.forecast.count'), JSON_UNESCAPED_UNICODE) ?>,
-        confirmDeleteChart: <?= json_encode(LOC('moneta.confirm.delete_chart'), JSON_UNESCAPED_UNICODE) ?>
+        confirmDeleteChart: <?= json_encode(LOC('moneta.confirm.delete_chart'), JSON_UNESCAPED_UNICODE) ?>,
+        lineDefault: <?= json_encode(LOC('moneta.lines.default_name'), JSON_UNESCAPED_UNICODE) ?>,
+        lineName: <?= json_encode(LOC('moneta.lines.name'), JSON_UNESCAPED_UNICODE) ?>,
+        lineColor: <?= json_encode(LOC('moneta.lines.color'), JSON_UNESCAPED_UNICODE) ?>,
+        lineAmount: <?= json_encode(LOC('moneta.lines.amount'), JSON_UNESCAPED_UNICODE) ?>,
+        removeLine: <?= json_encode(LOC('moneta.lines.remove'), JSON_UNESCAPED_UNICODE) ?>,
+        emptyLines: <?= json_encode(LOC('moneta.lines.empty'), JSON_UNESCAPED_UNICODE) ?>
     };
 
     let charts = <?= $chartsJson ?>;
@@ -509,6 +547,16 @@ $today = date('Y-m-d');
     let derivedSavePromise = null;
     let derivedSaveGen = 0;
     let derivedChartId = null;
+
+    let referenceLines = [];
+    let linesChartId = null;
+    let linesListEl = null;
+    let linesSaveStateEl = null;
+    let linesDirty = false;
+    let linesSaveTimer = null;
+    let linesSavePromise = null;
+    let linesSaveGen = 0;
+    const linePalette = ['#dc2626', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#0f766e'];
 
     let oneTimeItems = [];
     let ruleItems = [];
@@ -549,15 +597,28 @@ $today = date('Y-m-d');
         el.setAttribute('aria-hidden', 'true');
     }
 
+    async function parseApiResponse(response) {
+        const text = await response.text();
+        const start = text.indexOf('{');
+        let data = null;
+        try {
+            data = JSON.parse(start >= 0 ? text.slice(start) : text);
+        } catch (error) {
+            throw new Error(i18n.saveFailed);
+        }
+        if (!response.ok || !data || !data.ok) {
+            throw new Error((data && data.error) || ('HTTP ' + response.status));
+        }
+        return data;
+    }
+
     async function apiGet(action, params) {
         const qs = new URLSearchParams(Object.assign({ company: company, action: action }, params || {}));
         const response = await fetch('moneta_api.php?' + qs.toString(), {
             headers: { 'Accept': 'application/json' },
             credentials: 'same-origin'
         });
-        const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + response.status));
-        return data;
+        return parseApiResponse(response);
     }
 
     async function apiPost(action, body) {
@@ -567,9 +628,7 @@ $today = date('Y-m-d');
             credentials: 'same-origin',
             body: JSON.stringify(body || {})
         });
-        const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + response.status));
-        return data;
+        return parseApiResponse(response);
     }
 
     function formatDateLabel(value) {
@@ -591,7 +650,6 @@ $today = date('Y-m-d');
         afterDraw: function (chart) {
             const idx = chart.$todayIndex;
             if (idx == null || idx < 0) return;
-            const meta = chart.getDatasetMeta(0);
             const xScale = chart.scales.x;
             if (!xScale) return;
             const x = xScale.getPixelForValue(idx);
@@ -610,6 +668,50 @@ $today = date('Y-m-d');
             ctx.restore();
         }
     };
+
+    const referenceLinesPlugin = {
+        id: 'monetaReferenceLines',
+        afterDraw: function (chart) {
+            const lines = chart.$referenceLines;
+            if (!Array.isArray(lines) || !lines.length) return;
+            const yScale = chart.scales.y;
+            if (!yScale) return;
+            const area = chart.chartArea;
+            if (!area) return;
+            const yMin = Math.min(yScale.min, yScale.max);
+            const yMax = Math.max(yScale.min, yScale.max);
+            const ctx = chart.ctx;
+            lines.forEach(function (line) {
+                const amount = Number(line.amount);
+                if (!Number.isFinite(amount) || amount < yMin || amount > yMax) return;
+                const y = yScale.getPixelForValue(amount);
+                if (y < area.top || y > area.bottom) return;
+                const color = line.color || '#64748b';
+                ctx.save();
+                ctx.beginPath();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1.5;
+                ctx.moveTo(area.left, y);
+                ctx.lineTo(area.right, y);
+                ctx.stroke();
+                const label = String(line.name || '').trim();
+                if (label) {
+                    ctx.font = '11px sans-serif';
+                    ctx.fillStyle = color;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(label, area.left + 4, y - 2);
+                }
+                ctx.restore();
+            });
+        }
+    };
+
+    function payloadReferenceLines(chartPayload) {
+        return Array.isArray(chartPayload && chartPayload.reference_lines)
+            ? chartPayload.reference_lines
+            : [];
+    }
 
     function todayIndex(labels) {
         if (!Array.isArray(labels)) return -1;
@@ -671,9 +773,10 @@ $today = date('Y-m-d');
                 datasets: (chartPayload.series || []).map(function (s, i) { return chartDatasetOptions(s, i, tIdx); })
             },
             options: lineChartOptions(),
-            plugins: [todayLinePlugin]
+            plugins: [todayLinePlugin, referenceLinesPlugin]
         });
         chart.$todayIndex = tIdx;
+        chart.$referenceLines = payloadReferenceLines(chartPayload);
         return chart;
     }
 
@@ -697,6 +800,7 @@ $today = date('Y-m-d');
         chart.data.labels = chartPayload.labels.map(formatDateLabel);
         chart.data.datasets = series.map(function (s, i) { return chartDatasetOptions(s, i, tIdx); });
         chart.$todayIndex = tIdx;
+        chart.$referenceLines = payloadReferenceLines(chartPayload);
         chart.update('none');
         return true;
     }
@@ -922,6 +1026,159 @@ $today = date('Y-m-d');
         }
     }
 
+    // —— Reference lines (beide grafiektypes) ——
+    function bindReferenceLines(chartId, lines, saveStateEl, listEl) {
+        linesChartId = chartId;
+        referenceLines = Array.isArray(lines) ? lines.map(function (line) {
+            return {
+                id: line.id,
+                name: line.name || '',
+                color: line.color || '#64748b',
+                amount: line.amount != null ? line.amount : 0
+            };
+        }) : [];
+        linesSaveStateEl = saveStateEl;
+        linesListEl = listEl;
+        linesDirty = false;
+        linesSaveGen = 0;
+    }
+
+    function applySavedLines(chartId, lines) {
+        const chart = charts.find(function (c) { return c.id === chartId; });
+        if (chart) {
+            chart.reference_lines = lines;
+        }
+        if (chartPayloads[chartId]) {
+            chartPayloads[chartId].reference_lines = lines;
+        }
+    }
+
+    function scheduleLinesSave() {
+        linesDirty = true;
+        clearTimeout(linesSaveTimer);
+        if (linesSaveStateEl) linesSaveStateEl.textContent = i18n.saving;
+        linesSaveTimer = setTimeout(function () {
+            linesSavePromise = persistReferenceLines();
+        }, 450);
+    }
+
+    async function flushLinesSave() {
+        clearTimeout(linesSaveTimer);
+        if (linesSavePromise) await linesSavePromise;
+        else if (linesDirty) {
+            linesSavePromise = persistReferenceLines();
+            await linesSavePromise;
+        }
+    }
+
+    async function persistReferenceLines() {
+        const gen = ++linesSaveGen;
+        const chartId = linesChartId;
+        const payload = referenceLines.map(function (line) {
+            return {
+                id: line.id > 0 ? line.id : null,
+                name: line.name || i18n.lineDefault,
+                color: line.color || '#64748b',
+                amount: Number(line.amount) || 0
+            };
+        });
+        try {
+            const data = await apiPost('save_reference_lines', { chart_id: chartId, lines: payload });
+            if (gen !== linesSaveGen) {
+                return true;
+            }
+            mergeSavedIds(referenceLines, data.reference_lines || []);
+            applySavedLines(chartId, data.reference_lines || []);
+            if (linesSaveStateEl) linesSaveStateEl.textContent = i18n.saved;
+            linesDirty = true;
+            return true;
+        } catch (error) {
+            if (gen === linesSaveGen && linesSaveStateEl) {
+                linesSaveStateEl.textContent = i18n.saveFailed + ': ' + (error.message || error);
+            }
+            return false;
+        } finally {
+            linesSavePromise = null;
+        }
+    }
+
+    function addReferenceLine() {
+        referenceLines.push({
+            id: tempId--,
+            name: i18n.lineDefault,
+            color: linePalette[referenceLines.length % linePalette.length],
+            amount: 0
+        });
+        renderReferenceLines();
+        scheduleLinesSave();
+    }
+
+    function renderReferenceLines() {
+        if (!linesListEl) return;
+        linesListEl.innerHTML = '';
+        if (!referenceLines.length) {
+            const empty = document.createElement('div');
+            empty.className = 'moneta-empty';
+            empty.textContent = i18n.emptyLines;
+            linesListEl.appendChild(empty);
+            return;
+        }
+        referenceLines.forEach(function (line, index) {
+            const row = document.createElement('div');
+            row.className = 'moneta-line-row';
+
+            function field(labelText, el) {
+                const lab = document.createElement('label');
+                lab.textContent = labelText;
+                lab.appendChild(el);
+                return lab;
+            }
+
+            const nameInput = document.createElement('input');
+            nameInput.type = 'text';
+            nameInput.value = line.name || '';
+            nameInput.addEventListener('input', function () {
+                referenceLines[index].name = nameInput.value;
+            });
+            nameInput.addEventListener('change', scheduleLinesSave);
+
+            const colorInput = document.createElement('input');
+            colorInput.type = 'color';
+            colorInput.className = 'moneta-color-input';
+            colorInput.value = /^#[0-9a-fA-F]{6}$/.test(line.color || '') ? line.color : '#64748b';
+            colorInput.addEventListener('input', function () {
+                referenceLines[index].color = colorInput.value;
+            });
+            colorInput.addEventListener('change', scheduleLinesSave);
+
+            const amountInput = document.createElement('input');
+            amountInput.type = 'number';
+            amountInput.step = '0.01';
+            amountInput.value = line.amount != null ? line.amount : 0;
+            amountInput.addEventListener('input', function () {
+                referenceLines[index].amount = amountInput.value;
+            });
+            amountInput.addEventListener('change', scheduleLinesSave);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'moneta-btn-icon moneta-btn-danger';
+            removeBtn.title = i18n.removeLine;
+            removeBtn.textContent = '×';
+            removeBtn.addEventListener('click', function () {
+                referenceLines.splice(index, 1);
+                renderReferenceLines();
+                scheduleLinesSave();
+            });
+
+            row.appendChild(field(i18n.lineName, nameInput));
+            row.appendChild(field(i18n.lineColor, colorInput));
+            row.appendChild(field(i18n.lineAmount, amountInput));
+            row.appendChild(removeBtn);
+            linesListEl.appendChild(row);
+        });
+    }
+
     // —— Groups modal ——
     function normalizeGroupsForSave() {
         return groups.map(function (group) {
@@ -1090,7 +1347,14 @@ $today = date('Y-m-d');
         try {
             const data = await apiGet('groups', { chart_id: chartId });
             groups = data.groups || [];
+            bindReferenceLines(
+                chartId,
+                data.reference_lines || [],
+                groupsSaveState,
+                document.getElementById('moneta-groups-lines')
+            );
             renderGroups();
+            renderReferenceLines();
             openModal(groupsModal);
         } catch (error) {
             alert(error.message || String(error));
@@ -1101,10 +1365,12 @@ $today = date('Y-m-d');
         closeModal(groupsModal);
         try {
             await flushGroupsSave();
-            if (groupsDirty && activeChartId) {
+            await flushLinesSave();
+            if ((groupsDirty || linesDirty) && activeChartId) {
                 groupsSaveState.textContent = i18n.refreshing;
                 await refreshChart(activeChartId);
                 groupsDirty = false;
+                linesDirty = false;
             }
         } catch (error) {
             groupsSaveState.textContent = i18n.saveFailed + ': ' + (error.message || error);
@@ -1223,9 +1489,13 @@ $today = date('Y-m-d');
                 scheduleDerivedSave();
             });
 
+            const isIdentity = (row.operator || '+') === '=';
+            grid.className = isIdentity ? 'moneta-row-grid' : 'moneta-row-grid moneta-row-grid-3';
             grid.appendChild(field(i18n.seriesName, nameInput));
             grid.appendChild(field(i18n.leftGroup, leftSelect));
-            grid.appendChild(field(i18n.rightGroup, rightSelect));
+            if (!isIdentity) {
+                grid.appendChild(field(i18n.rightGroup, rightSelect));
+            }
             box.appendChild(grid);
 
             const opWrap = document.createElement('div');
@@ -1234,17 +1504,15 @@ $today = date('Y-m-d');
             opLabel.textContent = i18n.operator;
             const ops = document.createElement('div');
             ops.className = 'moneta-ops';
-            ['+', '-', '×', '÷'].forEach(function (sym) {
-                const map = { '+': '+', '-': '-', '×': '*', '÷': '/' };
+            ['+', '-', '×', '÷', '='].forEach(function (sym) {
+                const map = { '+': '+', '-': '-', '×': '*', '÷': '/', '=': '=' };
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.textContent = sym;
                 if ((row.operator || '+') === map[sym]) btn.classList.add('is-active');
                 btn.addEventListener('click', function () {
                     derivedSeries[index].operator = map[sym];
-                    ops.querySelectorAll('button').forEach(function (b) {
-                        b.classList.toggle('is-active', b === btn);
-                    });
+                    renderDerived();
                     scheduleDerivedSave();
                 });
                 ops.appendChild(btn);
@@ -1278,7 +1546,14 @@ $today = date('Y-m-d');
             groupOptions = data.group_options || groupOptions;
             const chart = charts.find(function (c) { return c.id === chartId; });
             derivedSeries = (chart && chart.derived_series) ? chart.derived_series.slice() : [];
+            bindReferenceLines(
+                chartId,
+                (chart && chart.reference_lines) ? chart.reference_lines : [],
+                derivedSaveState,
+                document.getElementById('moneta-derived-lines')
+            );
             renderDerived();
+            renderReferenceLines();
             openModal(derivedModal);
         } catch (error) {
             alert(error.message || String(error));
@@ -1289,9 +1564,11 @@ $today = date('Y-m-d');
         closeModal(derivedModal);
         try {
             await flushDerivedSave();
-            if (derivedDirty && derivedChartId) {
+            await flushLinesSave();
+            if ((derivedDirty || linesDirty) && derivedChartId) {
                 await refreshChart(derivedChartId);
                 derivedDirty = false;
+                linesDirty = false;
             }
         } catch (error) {
             derivedSaveState.textContent = i18n.saveFailed + ': ' + (error.message || error);
@@ -1772,6 +2049,8 @@ $today = date('Y-m-d');
         renderGroups();
         scheduleGroupsSave();
     });
+    document.getElementById('moneta-add-group-line').addEventListener('click', addReferenceLine);
+    document.getElementById('moneta-add-derived-line').addEventListener('click', addReferenceLine);
     document.getElementById('moneta-add-derived-series').addEventListener('click', function () {
         const first = groupOptions[0] ? groupOptions[0].id : 0;
         const second = groupOptions[1] ? groupOptions[1].id : first;

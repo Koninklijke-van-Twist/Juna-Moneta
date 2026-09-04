@@ -212,12 +212,10 @@ function auth_fetch_companies_for_environment_via_curl(string $url, array $auth)
     $raw = curl_exec($ch);
     if ($raw === false) {
         $error = curl_error($ch);
-        curl_close($ch);
         throw new RuntimeException('cURL fout bij ophalen companies: ' . $error);
     }
 
     $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
 
     if ($code < 200 || $code >= 300) {
         throw new RuntimeException('HTTP ' . $code . ' bij ophalen companies.');

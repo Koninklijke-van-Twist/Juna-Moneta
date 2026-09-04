@@ -9,7 +9,7 @@ const MONETA_GL_SELECT = 'No,Name,Balance_at_Date,Account_Type';
 const MONETA_GL_ENTRIES_ENTITY = 'G_LEntries';
 /** Rekeningschema/OData: per snapshot-datum unieke URL; week is veilig genoeg. */
 const MONETA_GL_ODATA_TTL = 604800; // 7 dagen
-const MONETA_SCHEMA_VERSION = 5;
+const MONETA_SCHEMA_VERSION = 6;
 const MONETA_CHART_TYPE_BALANCE = 'balance';
 const MONETA_CHART_TYPE_DERIVED = 'derived';
 
@@ -122,6 +122,7 @@ function moneta_ensure_gl_schema(PDO $pdo): void
     );
 
     moneta_migrate_charts_schema_v5($pdo);
+    moneta_migrate_charts_schema_v6($pdo);
 }
 
 function moneta_migrate_charts_schema_v5(PDO $pdo): void
@@ -247,6 +248,27 @@ function moneta_migrate_charts_schema_v5(PDO $pdo): void
             ':company' => $company,
         ]);
     }
+}
+
+function moneta_migrate_charts_schema_v6(PDO $pdo): void
+{
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS chart_reference_lines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chart_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL DEFAULT \'#64748b\',
+            amount REAL NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (chart_id) REFERENCES charts(id) ON DELETE CASCADE
+        )'
+    );
+    $pdo->exec(
+        'CREATE INDEX IF NOT EXISTS idx_chart_reference_lines_chart
+         ON chart_reference_lines (chart_id, sort_order, id)'
+    );
 }
 
 /**

@@ -4,11 +4,30 @@
  * JSON API voor grafieken, groepen, combinatieseries en gebruikersprognose.
  */
 
+ob_start();
+
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/logincheck.php';
 require_once __DIR__ . '/odata.php';
 require_once __DIR__ . '/auth_helper.php';
 require_once __DIR__ . '/moneta_data.php';
+
+/**
+ * Warnings/deprecations (PHP 8.5 vs productie) mogen JSON nooit vervuilen
+ * of via een error-handler als exception groepen-bewerken laten falen.
+ */
+function moneta_api_silence_php_noise(): void
+{
+    $noise = E_DEPRECATED | E_USER_DEPRECATED | E_NOTICE | E_USER_NOTICE | E_WARNING | E_USER_WARNING;
+    ini_set('display_errors', '0');
+    ini_set('display_startup_errors', '0');
+    error_reporting(E_ALL & ~$noise);
+    set_error_handler(static function (int $severity) use ($noise): bool {
+        return ($severity & $noise) !== 0;
+    });
+}
+
+moneta_api_silence_php_noise();
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -18,7 +37,11 @@ header('Cache-Control: no-store');
  */
 function moneta_api_json(array $payload, int $status = 200): void
 {
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
     http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
     echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
@@ -107,6 +130,7 @@ try {
             'company' => $company,
             'chart_id' => $chartId,
             'groups' => moneta_list_chart_groups($company, $chartId),
+            'reference_lines' => moneta_list_chart_reference_lines($chartId),
         ]);
     }
 
@@ -155,6 +179,26 @@ try {
             'company' => $company,
             'chart_id' => $chartId,
             'derived_series' => $saved,
+            'saved_at' => gmdate('c'),
+        ]);
+    }
+
+    if ($action === 'save_reference_lines' && $method === 'POST') {
+        $body = moneta_api_json_body();
+        $chartId = (int) ($body['chart_id'] ?? 0);
+        $lines = $body['lines'] ?? null;
+        if ($chartId <= 0) {
+            moneta_api_error('chart_id is verplicht.');
+        }
+        if (!is_array($lines)) {
+            moneta_api_error('Veld lines (array) is verplicht.');
+        }
+        $saved = moneta_save_chart_reference_lines($company, $chartId, $lines);
+        moneta_api_json([
+            'ok' => true,
+            'company' => $company,
+            'chart_id' => $chartId,
+            'reference_lines' => $saved,
             'saved_at' => gmdate('c'),
         ]);
     }

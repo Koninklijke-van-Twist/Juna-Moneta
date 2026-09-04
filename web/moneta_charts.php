@@ -48,7 +48,8 @@ function moneta_ensure_default_balance_chart(string $company): int
  *   chart_type: string,
  *   sort_order: int,
  *   groups?: list<array>,
- *   derived_series?: list<array>
+ *   derived_series?: list<array>,
+ *   reference_lines?: list<array>
  * }>
  */
 function moneta_list_charts(string $company, bool $includeDetails = true): array
@@ -81,6 +82,7 @@ function moneta_list_charts(string $company, bool $includeDetails = true): array
                 $item['groups'] = moneta_list_chart_groups($company, $chartId);
                 $item['derived_series'] = [];
             }
+            $item['reference_lines'] = moneta_list_chart_reference_lines($chartId);
         }
         $charts[] = $item;
     }
@@ -255,6 +257,8 @@ function moneta_delete_chart(string $company, int $chartId): void
             $pdo->prepare('DELETE FROM derived_chart_series WHERE chart_id = :chart_id')
                 ->execute([':chart_id' => $chartId]);
         }
+        $pdo->prepare('DELETE FROM chart_reference_lines WHERE chart_id = :chart_id')
+            ->execute([':chart_id' => $chartId]);
         $pdo->prepare('DELETE FROM charts WHERE id = :id AND company = :company')
             ->execute([':id' => $chartId, ':company' => $company]);
         $pdo->commit();
@@ -323,7 +327,7 @@ function moneta_normalize_derived_operator(string $operator): string
     if ($operator === '÷') {
         return '/';
     }
-    if (!in_array($operator, ['+', '-', '*', '/'], true)) {
+    if (!in_array($operator, ['+', '-', '*', '/', '='], true)) {
         return '+';
     }
 
@@ -384,10 +388,17 @@ function moneta_save_derived_series(string $company, int $chartId, array $series
             }
             $leftId = (int) ($item['left_group_id'] ?? 0);
             $rightId = (int) ($item['right_group_id'] ?? 0);
-            if ($leftId <= 0 || $rightId <= 0 || !isset($validGroups[$leftId], $validGroups[$rightId])) {
+            $operator = moneta_normalize_derived_operator((string) ($item['operator'] ?? '+'));
+            if ($leftId <= 0 || !isset($validGroups[$leftId])) {
                 continue;
             }
-            $operator = moneta_normalize_derived_operator((string) ($item['operator'] ?? '+'));
+            if ($operator === '=') {
+                if ($rightId <= 0 || !isset($validGroups[$rightId])) {
+                    $rightId = 0;
+                }
+            } elseif ($rightId <= 0 || !isset($validGroups[$rightId])) {
+                continue;
+            }
             $name = trim((string) ($item['name'] ?? ''));
             if ($name === '') {
                 $name = 'Serie ' . ($sortOrder + 1);
@@ -436,6 +447,142 @@ function moneta_save_derived_series(string $company, int $chartId, array $series
     }
 
     return moneta_list_derived_series($chartId);
+}
+
+function moneta_normalize_hex_color(string $color): string
+{
+    $color = trim($color);
+    if (preg_match('/^#([0-9a-fA-F]{6})$/', $color) === 1) {
+        return strtolower($color);
+    }
+    if (preg_match('/^#([0-9a-fA-F]{3})$/', $color) === 1) {
+        $h = substr($color, 1);
+        return '#' . strtolower($h[0] . $h[0] . $h[1] . $h[1] . $h[2] . $h[2]);
+    }
+
+    return '#64748b';
+}
+
+/**
+ * @return list<array{id: int, name: string, color: string, amount: float, sort_order: int}>
+ */
+function moneta_list_chart_reference_lines(int $chartId): array
+{
+    if ($chartId <= 0) {
+        return [];
+    }
+    $pdo = moneta_pdo();
+    $statement = $pdo->prepare(
+        'SELECT id, name, color, amount, sort_order
+         FROM chart_reference_lines
+         WHERE chart_id = :chart_id
+         ORDER BY sort_order ASC, id ASC'
+    );
+    $statement->execute([':chart_id' => $chartId]);
+
+    $rows = [];
+    foreach ($statement->fetchAll() as $row) {
+        $rows[] = [
+            'id' => (int) ($row['id'] ?? 0),
+            'name' => (string) ($row['name'] ?? ''),
+            'color' => moneta_normalize_hex_color((string) ($row['color'] ?? '')),
+            'amount' => (float) ($row['amount'] ?? 0),
+            'sort_order' => (int) ($row['sort_order'] ?? 0),
+        ];
+    }
+
+    return $rows;
+}
+
+/**
+ * @param list<array{id?: int|null, name?: string, color?: string, amount?: float|int|string}> $lines
+ * @return list<array{id: int, name: string, color: string, amount: float, sort_order: int}>
+ */
+function moneta_save_chart_reference_lines(string $company, int $chartId, array $lines): array
+{
+    $chart = moneta_get_chart($company, $chartId);
+    if ($chart === null) {
+        throw new InvalidArgumentException('Grafiek niet gevonden.');
+    }
+
+    $pdo = moneta_pdo();
+    $now = gmdate('c');
+    $pdo->beginTransaction();
+    try {
+        $existing = [];
+        $idStatement = $pdo->prepare('SELECT id FROM chart_reference_lines WHERE chart_id = :chart_id');
+        $idStatement->execute([':chart_id' => $chartId]);
+        foreach ($idStatement->fetchAll() as $row) {
+            $existing[(int) $row['id']] = true;
+        }
+
+        $insert = $pdo->prepare(
+            'INSERT INTO chart_reference_lines
+                (chart_id, name, color, amount, sort_order, created_at, updated_at)
+             VALUES
+                (:chart_id, :name, :color, :amount, :sort_order, :created_at, :updated_at)'
+        );
+        $update = $pdo->prepare(
+            'UPDATE chart_reference_lines
+             SET name = :name, color = :color, amount = :amount,
+                 sort_order = :sort_order, updated_at = :updated_at
+             WHERE id = :id AND chart_id = :chart_id'
+        );
+
+        $keep = [];
+        $sortOrder = 0;
+        foreach ($lines as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $name = trim((string) ($item['name'] ?? ''));
+            if ($name === '') {
+                $name = 'Lijn ' . ($sortOrder + 1);
+            }
+            $color = moneta_normalize_hex_color((string) ($item['color'] ?? ''));
+            $amount = (float) ($item['amount'] ?? 0);
+            $id = isset($item['id']) ? (int) $item['id'] : 0;
+
+            if ($id > 0 && isset($existing[$id])) {
+                $update->execute([
+                    ':name' => $name,
+                    ':color' => $color,
+                    ':amount' => $amount,
+                    ':sort_order' => $sortOrder,
+                    ':updated_at' => $now,
+                    ':id' => $id,
+                    ':chart_id' => $chartId,
+                ]);
+            } else {
+                $insert->execute([
+                    ':chart_id' => $chartId,
+                    ':name' => $name,
+                    ':color' => $color,
+                    ':amount' => $amount,
+                    ':sort_order' => $sortOrder,
+                    ':created_at' => $now,
+                    ':updated_at' => $now,
+                ]);
+                $id = (int) $pdo->lastInsertId();
+            }
+            $keep[$id] = true;
+            $sortOrder++;
+        }
+
+        foreach (array_keys($existing) as $existingId) {
+            if (!isset($keep[$existingId])) {
+                $pdo->prepare('DELETE FROM chart_reference_lines WHERE id = :id AND chart_id = :chart_id')
+                    ->execute([':id' => $existingId, ':chart_id' => $chartId]);
+            }
+        }
+
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+
+    return moneta_list_chart_reference_lines($chartId);
 }
 
 /**
@@ -488,7 +635,8 @@ function moneta_list_balance_group_options(string $company): array
  *   labels: string[],
  *   series: list<array{account_no: string, name: string, data: list<float|null>}>,
  *   today: string,
- *   chart: array
+ *   chart: array,
+ *   reference_lines: list<array>
  * }
  */
 function moneta_chart_data_for_id(string $company, int $chartId, string $dateFrom, string $dateTo): array
@@ -501,6 +649,7 @@ function moneta_chart_data_for_id(string $company, int $chartId, string $dateFro
         'series' => [],
         'today' => $today,
         'chart' => null,
+        'reference_lines' => [],
     ];
     if ($dateFrom === '' || $dateTo === '') {
         return $empty;
@@ -524,6 +673,7 @@ function moneta_chart_data_for_id(string $company, int $chartId, string $dateFro
 
     $data['today'] = $today;
     $data['chart'] = $chart;
+    $data['reference_lines'] = moneta_list_chart_reference_lines($chartId);
 
     return $data;
 }
@@ -712,7 +862,9 @@ function moneta_derived_chart_data(
     $neededGroupIds = [];
     foreach ($derived as $row) {
         $neededGroupIds[(int) $row['left_group_id']] = true;
-        $neededGroupIds[(int) $row['right_group_id']] = true;
+        if (moneta_normalize_derived_operator((string) $row['operator']) !== '=') {
+            $neededGroupIds[(int) $row['right_group_id']] = true;
+        }
     }
 
     // Laad balance-series per groep via hun chart.
@@ -754,11 +906,22 @@ function moneta_derived_chart_data(
         $leftId = (int) $row['left_group_id'];
         $rightId = (int) $row['right_group_id'];
         $left = $seriesByGroupId[$leftId] ?? null;
-        $right = $seriesByGroupId[$rightId] ?? null;
-        if ($left === null || $right === null) {
+        if ($left === null) {
             continue;
         }
         $op = moneta_normalize_derived_operator((string) $row['operator']);
+        if ($op === '=') {
+            $outSeries[] = [
+                'account_no' => 'derived:' . (int) $row['id'],
+                'name' => (string) $row['name'],
+                'data' => $left,
+            ];
+            continue;
+        }
+        $right = $seriesByGroupId[$rightId] ?? null;
+        if ($right === null) {
+            continue;
+        }
         $data = [];
         $count = count($labels);
         for ($i = 0; $i < $count; $i++) {
