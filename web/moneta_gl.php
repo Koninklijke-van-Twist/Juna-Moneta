@@ -8,7 +8,8 @@ const MONETA_GL_ENTITY = 'Rekeningschema';
 const MONETA_GL_SELECT = 'No,Name,Balance_at_Date,Account_Type';
 const MONETA_GL_ENTRIES_ENTITY = 'G_LEntries';
 /** Rekeningschema/OData: per snapshot-datum unieke URL; week is veilig genoeg. */
-const MONETA_GL_ODATA_TTL = 604800; // 7 dagen
+const MONETA_GL_ODATA_TTL = 604800; // 7 dagen — UI / on-demand Mímir max_age
+// MONETA_NIGHTLY_MAX_AGE (14400) staat in odata.php — nightly Mímir max_age.
 const MONETA_SCHEMA_VERSION = 6;
 const MONETA_CHART_TYPE_BALANCE = 'balance';
 const MONETA_CHART_TYPE_DERIVED = 'derived';

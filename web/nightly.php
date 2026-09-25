@@ -3,6 +3,7 @@
 /**
  * Nightly job: Rekeningschema-saldi → SQLite (groepscache mee).
  * Wordt via GET/CLI aangeroepen door het bestaande nightly-script (geen UI).
+ * Mímir max_age = MONETA_NIGHTLY_MAX_AGE (4u); UI houdt MONETA_GL_ODATA_TTL.
  *
  * Voorbeeld: GET /Moneta/web/nightly.php
  *            php nightly.php
@@ -27,13 +28,13 @@ if ($snapshotDate === '' && PHP_SAPI === 'cli') {
 }
 
 try {
-    $run = moneta_run_nightly_jobs($snapshotDate, MONETA_GL_ODATA_TTL);
+    $run = moneta_run_nightly_jobs($snapshotDate, MONETA_NIGHTLY_MAX_AGE);
     $hasResults = ($run['gl'] ?? []) !== [];
     $payload = [
         'ok' => $hasResults || ($run['errors'] ?? []) === [],
         'generated_at' => gmdate('c'),
         'snapshot_date' => (string) ($run['snapshot_date'] ?? ''),
-        'odata_ttl_seconds' => MONETA_GL_ODATA_TTL,
+        'odata_ttl_seconds' => MONETA_NIGHTLY_MAX_AGE,
         'companies_odata_ttl_seconds' => AUTH_COMPANIES_ODATA_TTL,
         'total_duration_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
         'gl' => $run['gl'] ?? [],
@@ -42,7 +43,7 @@ try {
 
     if (PHP_SAPI === 'cli') {
         echo 'OK snapshot_date=' . $payload['snapshot_date']
-            . ' gl_odata_ttl=' . MONETA_GL_ODATA_TTL . 's'
+            . ' gl_odata_ttl=' . MONETA_NIGHTLY_MAX_AGE . 's'
             . ' companies_ttl=' . AUTH_COMPANIES_ODATA_TTL . "s\n";
         echo "Rekeningschema:\n";
         foreach ($payload['gl'] as $row) {

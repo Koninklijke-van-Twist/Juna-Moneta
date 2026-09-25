@@ -55,6 +55,11 @@ function project_company_entity_url(string $baseUrl, string $environment, string
 
 function project_fetch_rows(string $company, string $entitySet, array $query, int $ttl = 3600): array
 {
+    // Mímir-modus: geen environment / auth / baseUrl nodig.
+    if (function_exists('odata_mimir_enabled') && odata_mimir_enabled()) {
+        return odata_mimir_query($company, $entitySet, $query, $ttl === 0 ? 3600 : $ttl);
+    }
+
     global $baseUrl;
 
     $environment = auth_get_environment_for_company($company, $ttl);

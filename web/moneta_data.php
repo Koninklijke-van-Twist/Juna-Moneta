@@ -10,7 +10,7 @@ require_once __DIR__ . '/moneta_gl.php';
 require_once __DIR__ . '/moneta_forecast_user.php';
 require_once __DIR__ . '/moneta_charts.php';
 
-/** @deprecated Gebruik MONETA_GL_ODATA_TTL / AUTH_COMPANIES_ODATA_TTL. */
+/** @deprecated Gebruik MONETA_NIGHTLY_MAX_AGE (Mímir nightly) of MONETA_GL_ODATA_TTL (UI). */
 const MONETA_NIGHTLY_ODATA_TTL = MONETA_GL_ODATA_TTL;
 
 function moneta_data_dir(): string
