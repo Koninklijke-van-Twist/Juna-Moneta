@@ -23,7 +23,10 @@ $GLOBALS['JUNA_MONETA_ODATA_BC_FETCH'] = static function (string $url, array $au
         'user' => (string) ($auth['user'] ?? ''),
         'ttl' => $ttl,
     ];
-    if (preg_match("#/ODataV4/Company\\('#", $url) === 1) {
+    if (strpos($url, '/Stale/') !== false) {
+        throw new Exception('HTTP 404 from OData: stale environment');
+    }
+    if (preg_match('#/ODataV4/Company\\(#', $url) === 1) {
         return [['No' => 'WO-1']];
     }
     if (preg_match('#/ODataV4/Compan#i', $url) === 1) {
@@ -308,6 +311,56 @@ if (odata_mimir_circuit_open() || fallback_count() !== $loggedBeforeLogic || cou
     fail('een fout van de caller opende het circuit of viel terug op BC');
 }
 
+odata_mimir_circuit_reset();
+$loggedBeforeTranslate = fallback_count();
+$beforeTranslate = count($calls);
+$encodedCompanyUrl = 'https://mimir.invalid/Production/ODataV4/Company(%27KVT%20Gas%27)/AppWerkorders?$select=No';
+$translatedRows = odata_get_all($encodedCompanyUrl, $auth, 11);
+$translateCall = $calls[$beforeTranslate] ?? null;
+$expectedTranslateUrl = 'https://bc.example:7148/Production/ODataV4/Company(%27KVT%20Gas%27)/AppWerkorders?$select=No';
+if (($translatedRows[0]['No'] ?? '') !== 'WO-1' || !is_array($translateCall) || ($translateCall['url'] ?? '') !== $expectedTranslateUrl || ($translateCall['user'] ?? '') !== 'bcuser') {
+    fail('onvertaalbare OData-URL viel niet terug op directe BC: ' . json_encode($translateCall));
+}
+if (odata_mimir_circuit_open() || fallback_count() !== $loggedBeforeTranslate) {
+    fail('een vertaalfout mag het circuit niet openen en niet als Mímir-storing gelogd worden');
+}
+
+$savedAuthList = $auth_list;
+$auth_list = [
+    'Stale' => ['mode' => 'basic', 'user' => 'stale-user', 'pass' => 'stale-secret'],
+    'Production' => $auth,
+];
+$partialRows = odata_direct_companies_as_rows(null);
+$partialNames = [];
+foreach ($partialRows as $partialRow) {
+    $partialNames[] = (string) ($partialRow['Name'] ?? '');
+}
+if (!in_array('KVT Gas', $partialNames, true) || ($partialRows[0]['environment'] ?? '') === 'Stale') {
+    fail('een falend environment blokkeerde de company-lijst: ' . json_encode($partialRows));
+}
+$staleExplicit = null;
+try {
+    odata_direct_companies_as_rows('Stale');
+    fail('een expliciet falend environment moet de fout doorgeven');
+} catch (Throwable $staleExplicit) {
+}
+if (!$staleExplicit instanceof Throwable || strpos($staleExplicit->getMessage(), '404') === false) {
+    fail('expliciet environment gaf niet de environment-fout door');
+}
+$auth_list = [
+    'Stale' => ['mode' => 'basic', 'user' => 'stale-user', 'pass' => 'stale-secret'],
+];
+$staleAll = null;
+try {
+    odata_direct_companies_as_rows(null);
+    fail('als elk environment faalt moet de fout terugkomen');
+} catch (Throwable $staleAll) {
+}
+if (!$staleAll instanceof Throwable || strpos($staleAll->getMessage(), '404') === false) {
+    fail('lege company-lijst verborg de environment-fout: ' . ($staleAll instanceof Throwable ? $staleAll->getMessage() : 'geen'));
+}
+$auth_list = $savedAuthList;
+
 $authFile = sys_get_temp_dir() . '/juna-moneta-auth-fallback.php';
 file_put_contents($authFile, <<<'PHP'
 <?php
@@ -338,10 +391,19 @@ if (($GLOBALS['environment'] ?? '') !== 'Sandbox' || ($GLOBALS['auth']['user'] ?
 if (($GLOBALS['auth_list']['Sandbox']['user'] ?? '') !== 'file-user' || ($GLOBALS['base'] ?? '') !== 'https://from-auth.example:7148/') {
     fail('lazy auth.php zette auth_list/base niet in $GLOBALS');
 }
-$GLOBALS['baseUrl'] = 'https://keep.example:7148/';
+$baseUrl = 'https://keep.example:7148/';
+$environment = 'mimir';
+$auth = [];
+$auth_list = [];
+if (isset($GLOBALS['JUNA_MONETA_AUTH_PHP_INCLUDED']) && is_array($GLOBALS['JUNA_MONETA_AUTH_PHP_INCLUDED'])) {
+    unset($GLOBALS['JUNA_MONETA_AUTH_PHP_INCLUDED'][$authFile]);
+}
 odata_ensure_bc_config_loaded();
 if (($GLOBALS['baseUrl'] ?? '') !== 'https://keep.example:7148/') {
     fail('een gezette baseUrl werd overschreven door auth.php');
+}
+if (($GLOBALS['environment'] ?? '') !== 'Sandbox') {
+    fail('de no-overwrite-check laadde auth.php niet opnieuw');
 }
 unset($GLOBALS['JUNA_MONETA_AUTH_PHP_PATH']);
 @unlink($authFile);

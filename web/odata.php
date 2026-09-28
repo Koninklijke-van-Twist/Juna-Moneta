@@ -482,6 +482,13 @@ function odata_mimir_or_direct(callable $viaMimir, callable $viaDirect)
     try {
         return $viaMimir();
     } catch (Throwable $exception) {
+        // Een URL die Mímir niet kan vertalen is geen Mímir-storing: direct BC, circuit blijft dicht.
+        if (strpos($exception->getMessage(), 'Mímir: OData-URL kon niet worden vertaald') !== false) {
+            if (odata_bc_credentials_configured()) {
+                return $viaDirect();
+            }
+            throw $exception;
+        }
         if (!odata_mimir_is_service_failure($exception)) {
             throw $exception;
         }
@@ -701,6 +708,7 @@ function odata_direct_companies_as_rows(?string $environmentFilter = null): arra
 
     $explicitFilter = $environmentFilter !== null && trim($environmentFilter) !== '' && strcasecmp(trim($environmentFilter), 'mimir') !== 0;
     $out = [];
+    $lastEnvError = null;
     foreach ($envs as $env) {
         $auth = odata_bc_auth_for_named_environment($env);
         if ($auth === null && $explicitFilter) {
@@ -709,7 +717,15 @@ function odata_direct_companies_as_rows(?string $environmentFilter = null): arra
         if ($auth === null) {
             continue;
         }
-        $rows = odata_get_all_direct(rtrim($base, '/') . '/' . rawurlencode($env) . '/ODataV4/Company', $auth, 300);
+        try {
+            $rows = odata_get_all_direct(rtrim($base, '/') . '/' . rawurlencode($env) . '/ODataV4/Company', $auth, 300);
+        } catch (Throwable $envError) {
+            if ($explicitFilter) {
+                throw $envError;
+            }
+            $lastEnvError = $envError;
+            continue;
+        }
         foreach ($rows as $row) {
             if (!is_array($row)) {
                 continue;
@@ -722,6 +738,9 @@ function odata_direct_companies_as_rows(?string $environmentFilter = null): arra
         }
     }
     if ($out === []) {
+        if ($lastEnvError instanceof Throwable) {
+            throw $lastEnvError;
+        }
         $previous = odata_mimir_last_error();
         if ($previous instanceof Throwable) {
             throw $previous;
