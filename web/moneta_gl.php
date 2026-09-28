@@ -324,7 +324,7 @@ function moneta_gl_entries_exist_on_date(string $company, string $date, int $ttl
     }
 
     $rows = project_try_fetch_rows($company, MONETA_GL_ENTRIES_ENTITY, [
-        '$select' => 'Entry_No,Posting_Date',
+        '$select' => 'Entry_No',
         '$filter' => 'Posting_Date eq ' . $date,
         '$top' => '1',
     ], $ttl);
@@ -359,7 +359,7 @@ function moneta_earliest_gl_posting_date(string $company, int $ttl = MONETA_GL_O
         }
         $probe = $monthEnd->format('Y-m-d');
         $rows = project_try_fetch_rows($company, MONETA_GL_ENTRIES_ENTITY, [
-            '$select' => 'Entry_No,Posting_Date',
+            '$select' => 'Entry_No',
             '$filter' => 'Posting_Date ge ' . $monthCursor->format('Y-m-d')
                 . ' and Posting_Date le ' . $probe,
             '$top' => '1',

@@ -11,8 +11,8 @@ require_once __DIR__ . '/odata.php';
  */
 const SANCUS_POSTEN_SELECT = 'Entry_No,Job_No,Entry_Type,Type,No,Work_Type_Code,Description,Posting_Date,Quantity,LVS_Main_Entity,LVS_Component_No,LVS_Work_Order_No,Total_Cost_LCY,Line_Amount_LCY';
 const SANCUS_PROJECT_SELECT = 'No,Description,KVT_Contract_No,Status,Bill_to_Customer_No,LVS_Bill_to_Name';
-const SANCUS_PLANNING_SELECT = 'Contract_No,Line_No,Main_Entity,Invoice_Amount,Planned_Invoice_Date,Posted_Invoice_No,Posted_Credit_Memo_No';
-const SANCUS_WERKORDER_SELECT = 'No,Main_Entity,Component_No,Job_No,Task_Description,Start_Date,Contract_No,Status';
+const SANCUS_PLANNING_SELECT = 'Line_No,Main_Entity,Invoice_Amount,Planned_Invoice_Date,Posted_Invoice_No,Posted_Credit_Memo_No';
+const SANCUS_WERKORDER_SELECT = 'No,Main_Entity,Component_No,Job_No,Task_Description,Start_Date,Status';
 
 /**
  * Functies
