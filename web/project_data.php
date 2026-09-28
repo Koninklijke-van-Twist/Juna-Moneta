@@ -55,16 +55,35 @@ function project_company_entity_url(string $baseUrl, string $environment, string
 
 function project_fetch_rows(string $company, string $entitySet, array $query, int $ttl = 3600): array
 {
-    // Mímir-modus: geen environment / auth / baseUrl nodig.
-    if (function_exists('odata_mimir_enabled') && odata_mimir_enabled()) {
-        return odata_mimir_query($company, $entitySet, $query, $ttl === 0 ? 3600 : $ttl);
+    // Mímir eerst. Faalt die aanroep, dan de pre-Mímir BC-route hieronder.
+    if (function_exists('odata_mimir_enabled') && odata_mimir_enabled() && function_exists('odata_mimir_or_direct') && function_exists('odata_mimir_query_impl')) {
+        return odata_mimir_or_direct(
+            static function () use ($company, $entitySet, $query, $ttl): array {
+                return odata_mimir_query_impl($company, $entitySet, $query, $ttl === 0 ? 3600 : $ttl);
+            },
+            static function () use ($company, $entitySet, $query, $ttl): array {
+                return project_fetch_rows_direct($company, $entitySet, $query, $ttl);
+            }
+        );
     }
 
+    return project_fetch_rows_direct($company, $entitySet, $query, $ttl);
+}
+
+/**
+ * Pre-Mímir fetch: environment + auth uit auth.php, BC-URL, lokale odata-filecache.
+ */
+function project_fetch_rows_direct(string $company, string $entitySet, array $query, int $ttl = 3600): array
+{
     global $baseUrl;
 
     $environment = auth_get_environment_for_company($company, $ttl);
     $auth = auth_get_auth_for_environment($environment);
     $url = project_company_entity_url($baseUrl, $environment, $company, $entitySet, $query);
+
+    if (function_exists('odata_get_all_direct') && function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open()) {
+        return odata_get_all_direct($url, $auth, $ttl);
+    }
 
     return odata_get_all($url, $auth, $ttl);
 }
