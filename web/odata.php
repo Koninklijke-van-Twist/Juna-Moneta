@@ -814,7 +814,7 @@ function odata_direct_companies_as_rows(?string $environmentFilter = null): arra
             continue;
         }
         try {
-            $rows = odata_get_all_direct(rtrim($base, '/') . '/' . rawurlencode($env) . '/ODataV4/Company?$select=Name', $auth, 300);
+            $rows = odata_get_all_direct(rtrim($base, '/') . '/' . rawurlencode($env) . '/ODataV4/Company', $auth, 300);
         } catch (Throwable $envError) {
             if ($explicitFilter) {
                 throw $envError;
