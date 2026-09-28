@@ -143,15 +143,25 @@ function odata_auth_is_usable($auth): bool
 
 function odata_bc_base_url(): ?string
 {
-    global $baseUrl;
-    if (!isset($baseUrl) || !is_string($baseUrl)) {
-        return null;
+    global $baseUrl, $base;
+    $candidates = [];
+    if (isset($baseUrl)) {
+        $candidates[] = $baseUrl;
     }
-    $base = trim($baseUrl);
-    if ($base === '' || stripos($base, 'mimir.invalid') !== false) {
-        return null;
+    if (isset($base)) {
+        $candidates[] = $base;
     }
-    return $base;
+    foreach ($candidates as $candidate) {
+        if (!is_string($candidate)) {
+            continue;
+        }
+        $trimmed = trim($candidate);
+        if ($trimmed === '' || stripos($trimmed, 'mimir.invalid') !== false) {
+            continue;
+        }
+        return $trimmed;
+    }
+    return null;
 }
 
 function odata_bc_environment(): ?string
@@ -178,14 +188,82 @@ function odata_bc_environment(): ?string
     return null;
 }
 
+function odata_bc_remember_auth($candidate): void
+{
+    if (!odata_auth_is_usable($candidate)) {
+        return;
+    }
+    $saved = $GLOBALS['JUNA_MONETA_BC_AUTH_ORIGINAL'] ?? null;
+    if (odata_auth_is_usable($saved)) {
+        return;
+    }
+    $GLOBALS['JUNA_MONETA_BC_AUTH_ORIGINAL'] = $candidate;
+}
+
+function odata_bc_shared_auth(): ?array
+{
+    global $auth;
+    if (isset($auth) && odata_auth_is_usable($auth)) {
+        return $auth;
+    }
+    $saved = $GLOBALS['JUNA_MONETA_BC_AUTH_ORIGINAL'] ?? null;
+    if (odata_auth_is_usable($saved)) {
+        return $saved;
+    }
+    return null;
+}
+
+function odata_bc_auth_list_has_usable_entry(): bool
+{
+    global $auth_list;
+    if (!isset($auth_list) || !is_array($auth_list)) {
+        return false;
+    }
+    foreach ($auth_list as $entry) {
+        if (odata_auth_is_usable($entry)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * $auth mag als $auth_list ontbreekt of leeg is, of als $env het primaire environment is.
+ */
+function odata_bc_may_use_shared_auth(string $env): bool
+{
+    if (!odata_bc_auth_list_has_usable_entry()) {
+        return true;
+    }
+    $primary = odata_bc_environment();
+    return $primary !== null && strcasecmp(trim($env), $primary) === 0;
+}
+
+/**
+ * Credentials voor een bekend environment: eigen entry, anders alleen $auth.
+ * Nooit de entry van een ander environment.
+ *
+ * @return array<string, mixed>|null
+ */
+function odata_bc_auth_for_shared_environment(string $env, array $passed): ?array
+{
+    if (!odata_bc_may_use_shared_auth($env)) {
+        return null;
+    }
+    if (odata_auth_is_usable($passed)) {
+        return $passed;
+    }
+    return odata_bc_shared_auth();
+}
+
 function odata_bc_auth_for_fallback(array $passed): ?array
 {
     if (odata_auth_is_usable($passed)) {
         return $passed;
     }
-    global $auth;
-    if (isset($auth) && odata_auth_is_usable($auth)) {
-        return $auth;
+    $shared = odata_bc_shared_auth();
+    if ($shared !== null) {
+        return $shared;
     }
     $primaryEnv = odata_bc_environment();
     $fromEnv = $primaryEnv !== null ? odata_bc_auth_for_named_environment($primaryEnv) : null;
@@ -409,7 +487,8 @@ function odata_bc_auth_for_named_environment(string $env): ?array
 
 /**
  * Auth van het environment van deze URL of dit bedrijf.
- * $auth / het primaire environment alleen als dat environment onbekend is.
+ * Eigen auth_list-entry wint. Anders $auth als de lijst leeg is of het
+ * environment het primaire is. Een ander environment zonder entry weigert.
  *
  * @return array<string, mixed>|null
  */
@@ -427,8 +506,25 @@ function odata_bc_auth_for_request(string $url, array $passed): ?array
         if ($matched !== null) {
             return $matched;
         }
+        return odata_bc_auth_for_shared_environment($env, $passed);
     }
     return odata_bc_auth_for_fallback($passed);
+}
+
+/**
+ * @param array<string, mixed>|null $auth
+ * @return array<string, mixed>
+ */
+function odata_bc_auth_or_rethrow(?array $auth): array
+{
+    if (is_array($auth)) {
+        return $auth;
+    }
+    $previous = odata_mimir_last_error();
+    if ($previous instanceof Throwable) {
+        throw $previous;
+    }
+    throw new Exception('Mímir mislukt.');
 }
 
 function odata_mimir_log_fallback(Throwable $exception): void
@@ -711,8 +807,8 @@ function odata_direct_companies_as_rows(?string $environmentFilter = null): arra
     $lastEnvError = null;
     foreach ($envs as $env) {
         $auth = odata_bc_auth_for_named_environment($env);
-        if ($auth === null && $explicitFilter) {
-            $auth = odata_bc_auth_for_fallback([]);
+        if ($auth === null) {
+            $auth = odata_bc_auth_for_shared_environment($env, []);
         }
         if ($auth === null) {
             continue;
@@ -875,8 +971,13 @@ function odata_direct_query(string $company, string $table, array $odataQuery, i
         $env = odata_bc_environment();
     }
     $base = odata_bc_base_url();
-    $auth = $env !== null ? odata_bc_auth_for_named_environment($env) : null;
-    if ($auth === null) {
+    $auth = null;
+    if ($env !== null) {
+        $auth = odata_bc_auth_for_named_environment($env);
+        if ($auth === null) {
+            $auth = odata_bc_auth_for_shared_environment($env, []);
+        }
+    } else {
         $auth = odata_bc_auth_for_fallback([]);
     }
     if ($env === null || $base === null || $auth === null) {
@@ -1003,7 +1104,7 @@ function odata_get_all(string $url, array $auth, $ttlSeconds = 300): array
             },
             static function () use ($url, $auth, $ttlSeconds): array {
                 $directUrl = odata_bc_url_from_odata_url($url);
-                $directAuth = odata_bc_auth_for_request($directUrl, $auth) ?? $auth;
+                $directAuth = odata_bc_auth_or_rethrow(odata_bc_auth_for_request($directUrl, $auth));
                 return odata_get_all_direct($directUrl, $directAuth, $ttlSeconds);
             }
         );

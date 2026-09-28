@@ -460,4 +460,163 @@ if (($directRows[0]['No'] ?? '') !== 'WO-1' || !is_array($directCall) || $direct
     fail('lege $mimirApi moet de oude directe route ongewijzigd gebruiken: ' . json_encode($directCall));
 }
 
+// Alleen $auth, zonder $auth_list: query, URL-fetch en companylijst gebruiken $auth.
+odata_mimir_circuit_reset();
+unset($GLOBALS['JUNA_MONETA_BC_AUTH_ORIGINAL']);
+$mimirApi = 'mimir_test_key_should_not_leak';
+$mimirBase = 'http://127.0.0.1:9';
+$baseUrl = 'https://bc.example:7148/';
+$GLOBALS['base'] = 'https://bc.example:7148/';
+$environment = 'Production';
+$auth = ['mode' => 'basic', 'user' => 'only-auth-user', 'pass' => 'only-auth-secret'];
+unset($auth_list);
+$GLOBALS['demeter_company_environment_map'] = null;
+$GLOBALS['demeter_companies_by_environment'] = null;
+$GLOBALS['demeter_active_environments'] = null;
+
+$ctx = auth_set_current_company_context('KVT Gas');
+if (($ctx['auth'] ?? null) !== [] || ($auth['user'] ?? null) === 'only-auth-user') {
+    fail('Mímir-context zonder auth_list moet de lege sentinel houden: ' . json_encode($ctx));
+}
+if (($GLOBALS['JUNA_MONETA_BC_AUTH_ORIGINAL']['user'] ?? '') !== 'only-auth-user') {
+    fail('originele $auth werd niet bewaard voor de fallback');
+}
+$contextCall = null;
+for ($i = 0, $n = count($calls); $i < $n; $i++) {
+    if (($calls[$i]['user'] ?? '') === 'only-auth-user') {
+        $contextCall = $calls[$i];
+        break;
+    }
+}
+if (!is_array($contextCall) || strpos((string) $contextCall['url'], 'https://bc.example:7148/Production/ODataV4/Compan') !== 0) {
+    fail('company-discovery zonder auth_list gebruikte $auth niet: ' . json_encode($contextCall));
+}
+
+odata_mimir_circuit_reset();
+$beforeOnlyQuery = count($calls);
+$onlyQuery = odata_mimir_query('KVT Gas', 'AppResource', ['$select' => 'No'], 60);
+$onlyQueryCall = $calls[$beforeOnlyQuery] ?? null;
+if (($onlyQuery[0]['No'] ?? '') !== 'WO-1' || !is_array($onlyQueryCall) || ($onlyQueryCall['user'] ?? '') !== 'only-auth-user') {
+    fail('query zonder auth_list gebruikte $auth niet: ' . json_encode($onlyQueryCall));
+}
+if (strpos((string) ($onlyQueryCall['url'] ?? ''), "https://bc.example:7148/Production/ODataV4/Company('KVT%20Gas')/AppResource?") !== 0) {
+    fail('query zonder auth_list ging niet naar het primaire environment: ' . json_encode($onlyQueryCall));
+}
+
+odata_mimir_circuit_reset();
+$beforeOnlyFetch = count($calls);
+$onlyFetch = odata_mimir_fetch_all(
+    "https://mimir.invalid/Production/ODataV4/Company('KVT%20Gas')/AppWerkorders?\$select=No",
+    15
+);
+$onlyFetchCall = $calls[$beforeOnlyFetch] ?? null;
+$expectedOnlyFetch = "https://bc.example:7148/Production/ODataV4/Company('KVT%20Gas')/AppWerkorders?\$select=No";
+if (($onlyFetch[0]['No'] ?? '') !== 'WO-1' || !is_array($onlyFetchCall) || ($onlyFetchCall['url'] ?? '') !== $expectedOnlyFetch || ($onlyFetchCall['user'] ?? '') !== 'only-auth-user') {
+    fail('URL-fetch zonder auth_list gebruikte $auth niet: ' . json_encode($onlyFetchCall));
+}
+
+odata_mimir_circuit_reset();
+$beforeOnlyCompanies = count($calls);
+$onlyNames = odata_mimir_list_companies(null);
+$onlyCompanyCall = $calls[$beforeOnlyCompanies] ?? null;
+if ($onlyNames !== $expectedNames || !is_array($onlyCompanyCall) || ($onlyCompanyCall['user'] ?? '') !== 'only-auth-user') {
+    fail('companylijst zonder auth_list gebruikte $auth niet: ' . json_encode($onlyCompanyCall));
+}
+if (strpos((string) ($onlyCompanyCall['url'] ?? ''), 'https://bc.example:7148/Production/ODataV4/Company') !== 0) {
+    fail('companylijst zonder auth_list vroeg niet het primaire environment: ' . json_encode($onlyCompanyCall));
+}
+
+odata_mimir_circuit_reset();
+$beforeOnlyProject = count($calls);
+$onlyProject = project_fetch_rows('KVT Gas', 'Rekeningschema', ['$select' => 'No'], 60);
+$onlyProjectCall = null;
+for ($i = $beforeOnlyProject; $i < count($calls); $i++) {
+    if (strpos($calls[$i]['url'], '/Rekeningschema?') !== false) {
+        $onlyProjectCall = $calls[$i];
+    }
+}
+if (($onlyProject[0]['No'] ?? '') !== 'WO-1' || !is_array($onlyProjectCall) || ($onlyProjectCall['user'] ?? '') !== 'only-auth-user') {
+    fail('project_fetch_rows zonder auth_list gebruikte $auth niet: ' . json_encode($onlyProjectCall));
+}
+
+// auth_list alleen Sandbox, primaire environment Production: unmapped bedrijf via $auth.
+odata_mimir_circuit_reset();
+unset($GLOBALS['JUNA_MONETA_BC_AUTH_ORIGINAL']);
+$environment = 'Production';
+$auth = ['mode' => 'basic', 'user' => 'primary-user', 'pass' => 'primary-secret'];
+$auth_list = [
+    'Sandbox' => ['mode' => 'basic', 'user' => 'sandbox-user', 'pass' => 'sandbox-secret'],
+];
+$GLOBALS['demeter_company_environment_map'] = [
+    'Sandbox Co' => 'Sandbox',
+];
+$beforeUnmapped = count($calls);
+$unmappedRows = odata_mimir_query('Unmapped Co', 'Rekeningschema', ['$select' => 'No'], 10);
+$unmappedCall = $calls[$beforeUnmapped] ?? null;
+$expectedUnmapped = "https://bc.example:7148/Production/ODataV4/Company('Unmapped%20Co')/Rekeningschema?";
+if (($unmappedRows[0]['No'] ?? '') !== 'WO-1' || !is_array($unmappedCall) || strpos((string) ($unmappedCall['url'] ?? ''), $expectedUnmapped) !== 0 || ($unmappedCall['user'] ?? '') !== 'primary-user') {
+    fail('unmapped bedrijf ging niet via $auth op het primaire environment: ' . json_encode($unmappedCall));
+}
+
+odata_mimir_circuit_reset();
+$beforeUnmappedProject = count($calls);
+$unmappedProject = project_fetch_rows('Unmapped Co', 'Rekeningschema', ['$select' => 'No'], 10);
+$unmappedProjectCall = null;
+for ($i = $beforeUnmappedProject; $i < count($calls); $i++) {
+    if (strpos($calls[$i]['url'], '/Rekeningschema?') !== false) {
+        $unmappedProjectCall = $calls[$i];
+    }
+}
+if (($unmappedProject[0]['No'] ?? '') !== 'WO-1' || !is_array($unmappedProjectCall) || ($unmappedProjectCall['user'] ?? '') !== 'primary-user' || strpos((string) ($unmappedProjectCall['url'] ?? ''), 'https://bc.example:7148/Production/ODataV4/') !== 0) {
+    fail('project_fetch_rows voor unmapped bedrijf gebruikte $auth niet: ' . json_encode($unmappedProjectCall));
+}
+
+// auth_list alleen Production, Sandbox-URL: weigeren zonder BC-call.
+odata_mimir_circuit_reset();
+unset($GLOBALS['JUNA_MONETA_BC_AUTH_ORIGINAL']);
+$environment = 'Production';
+$auth = ['mode' => 'basic', 'user' => 'primary-user', 'pass' => 'primary-secret'];
+$auth_list = [
+    'Production' => $auth,
+];
+$GLOBALS['demeter_company_environment_map'] = [
+    'Sandbox Co' => 'Sandbox',
+];
+$beforeSandboxRefuse = count($calls);
+$sandboxRefused = null;
+try {
+    odata_get_all(
+        "https://mimir.invalid/Sandbox/ODataV4/Company('Other%20Co')/AppWerkorders?\$select=No",
+        $auth,
+        12
+    );
+    fail('Sandbox-URL moet weigeren');
+} catch (Throwable $sandboxRefused) {
+}
+if (!$sandboxRefused instanceof Throwable || strpos($sandboxRefused->getMessage(), 'Mímir') === false) {
+    fail('Sandbox-URL gaf niet de oorspronkelijke Mímir-fout: ' . ($sandboxRefused instanceof Throwable ? $sandboxRefused->getMessage() : 'geen'));
+}
+if (count($calls) !== $beforeSandboxRefuse) {
+    fail('Sandbox-URL deed toch een BC-call: ' . json_encode(array_slice($calls, $beforeSandboxRefuse)));
+}
+
+odata_mimir_circuit_reset();
+$beforeSandboxQuery = count($calls);
+$sandboxQueryRefused = null;
+try {
+    odata_mimir_query('Sandbox Co', 'Rekeningschema', ['$select' => 'No'], 10);
+    fail('query naar een ander environment zonder entry moet weigeren');
+} catch (Throwable $sandboxQueryRefused) {
+}
+if (!$sandboxQueryRefused instanceof Throwable || strpos($sandboxQueryRefused->getMessage(), 'Mímir') === false) {
+    fail('query-weigering is niet de Mímir-fout: ' . ($sandboxQueryRefused instanceof Throwable ? $sandboxQueryRefused->getMessage() : 'geen'));
+}
+if (count($calls) !== $beforeSandboxQuery) {
+    fail('query naar Sandbox deed toch een BC-call: ' . json_encode(array_slice($calls, $beforeSandboxQuery)));
+}
+
+if (strpos(fallback_log(), 'only-auth-secret') !== false || strpos(fallback_log(), 'primary-secret') !== false) {
+    fail('log bevat een geheim uit de alleen-$auth fallback');
+}
+
 echo "OK\n";

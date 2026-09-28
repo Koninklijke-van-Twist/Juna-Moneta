@@ -77,9 +77,26 @@ function project_fetch_rows_direct(string $company, string $entitySet, array $qu
 {
     global $baseUrl;
 
-    $environment = auth_get_environment_for_company($company, $ttl);
+    try {
+        $environment = auth_get_environment_for_company($company, $ttl);
+    } catch (Throwable $error) {
+        $unmapped = strpos($error->getMessage(), 'Geen environment gevonden voor bedrijf:') === 0;
+        $onFallback = function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open();
+        $primary = ($unmapped && $onFallback && function_exists('odata_bc_environment')) ? odata_bc_environment() : null;
+        if (!is_string($primary) || $primary === '') {
+            throw $error;
+        }
+        $environment = $primary;
+    }
     $auth = auth_get_auth_for_environment($environment);
-    $url = project_company_entity_url($baseUrl, $environment, $company, $entitySet, $query);
+    $base = is_string($baseUrl ?? null) ? $baseUrl : '';
+    if (function_exists('odata_bc_base_url')) {
+        $resolved = odata_bc_base_url();
+        if (is_string($resolved) && $resolved !== '') {
+            $base = $resolved;
+        }
+    }
+    $url = project_company_entity_url($base, $environment, $company, $entitySet, $query);
 
     if (function_exists('odata_get_all_direct') && function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open()) {
         return odata_get_all_direct($url, $auth, $ttl);
