@@ -29,3 +29,9 @@ $baseUrl = "https://my-bc-domain.com:7148/";
 $allowedUsers = [
     "user@domain.nl"
 ];
+
+// Optioneel, alleen als een HTTP-runner odata.php?action=… of nightly.php
+// zonder browsersessie moet aanroepen. Header X-Moneta-Secret moet exact
+// dit geheim zijn. Weglaten: geen anonieme toegang.
+// CLI (php web/nightly.php) heeft dit niet nodig.
+// $monetaRunnerSecret = '';

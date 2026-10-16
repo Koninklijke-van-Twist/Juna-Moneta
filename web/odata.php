@@ -1372,53 +1372,7 @@ function odata_cache_read_payload_meta(string $path): ?array
         'cached_at' => (int) ($meta['cached_at'] ?? 0),
         'expires_at' => (int) ($meta['expires_at'] ?? 0),
         'source_url' => (string) ($meta['source_url'] ?? ''),
-        'attributes' => odata_cache_extract_attributes_from_payload($payload),
     ];
-}
-
-function odata_cache_extract_attributes_from_payload(array $payload): array
-{
-    $data = $payload['data'] ?? null;
-    if (!is_array($data) || count($data) === 0) {
-        return [];
-    }
-
-    $firstRow = $data[0] ?? null;
-    if (!is_array($firstRow)) {
-        return [];
-    }
-
-    $result = [];
-    foreach ($firstRow as $key => $value) {
-        if (!is_string($key)) {
-            continue;
-        }
-
-        $key = trim($key);
-        if ($key === '') {
-            continue;
-        }
-
-        if (strcasecmp($key, '@odata.etag') === 0) {
-            continue;
-        }
-
-        if (is_scalar($value) || $value === null) {
-            $valueText = trim((string) $value);
-        } else {
-            $encoded = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            $valueText = is_string($encoded) ? $encoded : '';
-        }
-
-        if ($valueText === '') {
-            $result[] = $key;
-            continue;
-        }
-
-        $result[] = $key . ': ' . $valueText;
-    }
-
-    return array_values(array_unique($result));
 }
 
 function odata_cache_title_from_url(string $url, string $fallback): string
@@ -1480,7 +1434,6 @@ function odata_cache_status_payload(): array
                 'id' => $filename,
                 'name' => odata_cache_title_from_url($url, $nameFallback),
                 'url' => $url,
-                'attributes' => is_array($meta['attributes'] ?? null) ? $meta['attributes'] : [],
                 'size_bytes' => $sizeBytes,
                 'cached_at' => (int) ($meta['cached_at'] ?? 0),
                 'expires_at' => $expiresAt,
@@ -1599,6 +1552,185 @@ function odata_is_direct_request(): bool
 }
 
 /**
+ * Zelfde toegestane gebruiker als logincheck.php: lijst of map in $allowedUsers.
+ *
+ * @param mixed $allowedUsers
+ */
+function odata_email_is_allowed(string $email, $allowedUsers): bool
+{
+    $email = strtolower(trim($email));
+    if ($email === '' || !is_array($allowedUsers)) {
+        return false;
+    }
+
+    foreach ($allowedUsers as $emailKey => $value) {
+        $allowedEmail = is_int($emailKey) ? (string) $value : (string) $emailKey;
+        if (strtolower(trim($allowedEmail)) === $email) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Nightly mag een actie alleen zonder browsersessie via CLI, of via een
+ * geheim dat al op de server staat. Leeg geheim of alleen localhost telt niet.
+ */
+function odata_direct_action_skips_login(string $sapi, string $presentedSecret, string $serverSecret): bool
+{
+    if ($sapi === 'cli') {
+        return true;
+    }
+    if ($presentedSecret === '' || $serverSecret === '') {
+        return false;
+    }
+
+    return hash_equals($serverSecret, $presentedSecret);
+}
+
+function odata_presented_runner_secret(): string
+{
+    $header = $_SERVER['HTTP_X_MONETA_SECRET'] ?? '';
+    if (!is_string($header)) {
+        return '';
+    }
+
+    return trim($header);
+}
+
+/**
+ * @param array<string, mixed> $authVars
+ */
+function odata_configured_runner_secret(array $authVars = []): string
+{
+    $candidates = [];
+    if (isset($GLOBALS['monetaRunnerSecret']) && is_string($GLOBALS['monetaRunnerSecret'])) {
+        $candidates[] = $GLOBALS['monetaRunnerSecret'];
+    }
+    if (isset($authVars['monetaRunnerSecret']) && is_string($authVars['monetaRunnerSecret'])) {
+        $candidates[] = $authVars['monetaRunnerSecret'];
+    }
+    $env = getenv('MONETA_RUNNER_SECRET');
+    if (is_string($env)) {
+        $candidates[] = $env;
+    }
+
+    foreach ($candidates as $candidate) {
+        $secret = trim($candidate);
+        if ($secret !== '') {
+            return $secret;
+        }
+    }
+
+    return '';
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function odata_read_auth_file_vars(): array
+{
+    static $cache = [];
+
+    $path = odata_bc_auth_php_path();
+    if (isset($cache[$path])) {
+        return $cache[$path];
+    }
+    if (!is_file($path)) {
+        $cache[$path] = [];
+        return [];
+    }
+
+    // require_once: auth.php kan functies definiëren. Een tweede require in
+    // hetzelfde verzoek (nightly laadt het bestand al) zou dan fataal zijn.
+    // Variabelen uit een eerdere top-level include staan in $GLOBALS; die
+    // leest odata_configured_runner_secret apart.
+    $loaded = (static function (string $__path): array {
+        ob_start();
+        try {
+            require_once $__path;
+        } finally {
+            ob_end_clean();
+        }
+        unset($__path);
+        return get_defined_vars();
+    })($path);
+
+    $cache[$path] = is_array($loaded) ? $loaded : [];
+    return $cache[$path];
+}
+
+function odata_deny_action_access(): void
+{
+    if (!headers_sent()) {
+        http_response_code(403);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    }
+    echo json_encode(['ok' => false, 'error' => 'Geen toegang'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/**
+ * CLI, of een HTTP-runner met het servergeheim. Geen anonieme of localhost-bypass.
+ */
+function odata_runner_request_authorized(): bool
+{
+    $sapi = php_sapi_name();
+    if ($sapi === 'cli') {
+        return true;
+    }
+
+    $authVars = odata_read_auth_file_vars();
+
+    return odata_direct_action_skips_login($sapi, odata_presented_runner_secret(), odata_configured_runner_secret($authVars));
+}
+
+/**
+ * Zelfde login/sessie als de rest van Juna-Moneta (login/lib.php + $allowedUsers),
+ * vóór elke directe odata.php-actie. Geen anonieme of localhost-bypass.
+ */
+function odata_require_direct_action_access(): void
+{
+    if (odata_runner_request_authorized()) {
+        return;
+    }
+
+    $authVars = odata_read_auth_file_vars();
+    $loginLib = __DIR__ . '/../login/lib.php';
+    if (!is_file($loginLib)) {
+        odata_deny_action_access();
+    }
+    require_once $loginLib;
+
+    global $allowedUsers;
+    if (!isset($allowedUsers) && array_key_exists('allowedUsers', $authVars)) {
+        $allowedUsers = $authVars['allowedUsers'];
+    }
+    $email = strtolower(trim((string) ($_SESSION['user']['email'] ?? '')));
+    if (!odata_email_is_allowed($email, $allowedUsers ?? null)) {
+        $forbidden = __DIR__ . '/../login/403.php';
+        if (is_file($forbidden)) {
+            require $forbidden;
+            die();
+        }
+        odata_deny_action_access();
+    }
+
+    // cache_status polt elke 2s en leest alle cachebestanden. Het sessiebestand
+    // niet vasthouden tijdens dat werk.
+    odata_release_session_lock();
+}
+
+function odata_release_session_lock(): void
+{
+    if (function_exists('session_status') && function_exists('session_write_close') && session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+}
+
+/**
  * Render een volledige cache-widget (HTML + scoped CSS + JS polling) als string.
  *
  * Agent-contract:
@@ -1633,7 +1765,6 @@ function odata_is_direct_request(): bool
  *       "id": "...json",
  *       "name": "ValueEntries",
  *       "url": "https://...",
- *       "attributes": ["No: 1000", "Description: Filter element"],
  *       "size_bytes": 123,
  *       "cached_at": 1700000000,
  *       "expires_at": 1700003600
@@ -2124,18 +2255,7 @@ function injectTimerHtml(array $options = []): string
                     const id = String(entry.id || '');
                     const isDeleting = deletingCacheIds.has(id);
                     const nameBase = String(entry.name || id || 'Onbekend');
-                    const attributes = Array.isArray(entry.attributes) ? entry.attributes : [];
-                    const attrTextRaw = attributes
-                        .map(function (value)
-                        {
-                            return String(value || '').trim();
-                        })
-                        .filter(function (value)
-                        {
-                            return value !== '';
-                        })
-                        .join(', ');
-                    const titleRaw = attrTextRaw !== '' ? (nameBase + ' — ' + attrTextRaw) : nameBase;
+                    const titleRaw = nameBase;
 
                     const url = String(entry.url || '');
                     const sizeBytes = Number(entry.size_bytes || 0);
@@ -2461,12 +2581,21 @@ HTML;
 }
 
 $odataAction = (string) ($_GET['action'] ?? '');
-if (odata_is_direct_request() && $odataAction === 'cache_status') {
-    odata_send_cache_status_json();
-}
-if (odata_is_direct_request() && $odataAction === 'cache_delete') {
-    odata_send_cache_delete_json();
-}
-if (odata_is_direct_request() && $odataAction === 'cache_clear') {
-    odata_send_cache_clear_json();
+if (odata_is_direct_request() && $odataAction !== '') {
+    odata_require_direct_action_access();
+    if ($odataAction === 'cache_status') {
+        odata_send_cache_status_json();
+    } elseif ($odataAction === 'cache_delete') {
+        odata_send_cache_delete_json();
+    } elseif ($odataAction === 'cache_clear') {
+        odata_send_cache_clear_json();
+    } else {
+        if (!headers_sent()) {
+            http_response_code(404);
+            header('Content-Type: application/json; charset=utf-8');
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        }
+        echo json_encode(['ok' => false, 'error' => 'Onbekende actie'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 }

@@ -14,10 +14,12 @@ ini_set('max_execution_time', '1800');
 ignore_user_abort(true);
 
 require_once __DIR__ . '/auth.php';
-if (PHP_SAPI !== 'cli') {
+require_once __DIR__ . '/odata.php';
+// CLI en een gezet runner-geheim (header X-Moneta-Secret) mogen de nightly
+// zonder browsersessie. Iedere andere HTTP-aanroep gaat door logincheck.
+if (!odata_runner_request_authorized()) {
     require_once __DIR__ . '/logincheck.php';
 }
-require_once __DIR__ . '/odata.php';
 require_once __DIR__ . '/auth_helper.php';
 require_once __DIR__ . '/moneta_data.php';
 
