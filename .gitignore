@@ -1,13 +1,24 @@
 
 web/auth.php
 
-web/cache/
+web/cache/*
+!web/cache/.htaccess
+!web/cache/index.html
+!web/cache/index.php
+!web/cache/odata/
+web/cache/odata/*
+!web/cache/odata/.htaccess
+!web/cache/odata/index.html
+!web/cache/odata/index.php
 
 BC Webservices.txt
 
-web/data/user_prefs/
 web/data/*.sqlite
 web/data/*.sqlite-*
+web/data/user_prefs/*
+!web/data/user_prefs/.htaccess
+!web/data/user_prefs/index.html
+!web/data/user_prefs/index.php
 data/user_prefs/
 
 web/analytics/analytics.sqlite
