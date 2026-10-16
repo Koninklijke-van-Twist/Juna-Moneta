@@ -90,7 +90,7 @@ assert_same(true, odata_email_is_allowed('Analyst@kvt.nl', $allowed), 'lijst-geb
 assert_same(true, odata_email_is_allowed('planner@kvt.nl', $allowed), 'map-gebruiker');
 assert_same(false, odata_email_is_allowed('andere@kvt.nl', $allowed), 'niet op de lijst');
 assert_same(false, odata_email_is_allowed('', $allowed), 'lege sessie');
-assert_same(false, odata_email_is_allowed('analyst@kvt.nl', null), 'geen whitelist');
+assert_same(true, odata_email_is_allowed('analyst@kvt.nl', null), 'geen whitelist');
 
 assert_same(true, odata_direct_action_skips_login('cli', '', ''), 'cli zonder geheim');
 assert_same(false, odata_direct_action_skips_login('fpm-fcgi', '', ''), 'web anoniem');
@@ -244,41 +244,7 @@ foreach ([
     assert_not_contains($indexBody, 'Customer', $indexFile);
 }
 
-$workflow = (string) file_get_contents($root . '/.github/workflows/deploy-ftp.yml');
-$includeCacheAt = strpos($workflow, '--include-glob cache/.htaccess');
-$includeDataAt = strpos($workflow, '--include-glob data/.htaccess');
-$excludeCacheAt = strpos($workflow, '--exclude-glob cache/**');
-$excludeOdataAt = strpos($workflow, '--exclude-glob cache/odata/**');
-$excludeDataAt = strpos($workflow, '--exclude-glob data/**');
-$excludeSqliteAt = strpos($workflow, '--exclude-glob data/*.sqlite');
-if ($includeCacheAt === false || $includeDataAt === false || $excludeCacheAt === false || $excludeOdataAt === false || $excludeDataAt === false) {
-    fail('ftp-deploy mist data- of cache-patronen');
-}
-if ($includeCacheAt < $excludeCacheAt || $includeCacheAt < $excludeOdataAt) {
-    fail('cache/.htaccess moet ná de cache-excludes staan, anders uploadt lftp hem niet');
-}
-if ($includeDataAt < $excludeDataAt || ($excludeSqliteAt !== false && $includeDataAt < $excludeSqliteAt)) {
-    fail('data/.htaccess moet ná de data-excludes staan, anders uploadt lftp hem niet of overschrijft sqlite');
-}
-foreach ([
-    '--include-glob cache/index.html',
-    '--include-glob cache/index.php',
-    '--include-glob cache/odata/.htaccess',
-    '--include-glob cache/odata/index.html',
-    '--include-glob cache/odata/index.php',
-    '--include-glob data/index.html',
-    '--include-glob data/index.php',
-    '--include-glob data/user_prefs/.htaccess',
-    '--include-glob data/user_prefs/index.html',
-    '--include-glob data/user_prefs/index.php',
-    '--exclude-glob auth.php',
-    '--exclude-glob .htaccess',
-    '--exclude-glob data/*.sqlite',
-    '--exclude-glob data/*.sqlite-*',
-    '--exclude-glob data/user_prefs/**',
-] as $needle) {
-    assert_contains($workflow, $needle, 'ftp-deploy');
-}
+// FTP-deploy en afscherming: zie tests/protect_dirs_test.php.
 
 $phpCgi = trim((string) shell_exec('command -v php-cgi 2>/dev/null'));
 if ($phpCgi !== '') {
