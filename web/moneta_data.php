@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/kvt_protect_dirs.php';
 
 /**
  * Moneta data layer: SQLite PDO + nightly Rekeningschema-snapshots.

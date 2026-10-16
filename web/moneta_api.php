@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/kvt_protect_dirs.php';
 
 /**
  * JSON API voor grafieken, groepen, combinatieseries en gebruikersprognose.

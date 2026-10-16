@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/kvt_protect_dirs.php';
 
 /**
  * Multi-grafieken: balance + derived charts, groepen met negate, forecast-overlay.
